@@ -1,0 +1,1094 @@
+---
+title: "CBA_lens_1"
+author: "Matthew"
+date: "2024-06-25"
+output: html_document
+---
+
+# Introduction
+
+This notebook will contain the code to create the first lens of a customer based audit "How different are your customers"(Fader, Hardie & Ross, 2022). This lens will help us understand how customers differ, and is foundational for the following 4 lenses. The insights gained from this lens will be presented throughout.
+
+## 1. Uploading packages and data
+
+I first uploaded the necessary data and packages.
+
+```{r}
+install.packages( "tidyverse")
+```
+```{r}
+install.packages("BTYDplus")
+```
+```{r}
+install.packages("readxl")
+```
+```{r}
+install.packages("dplyr")
+```
+
+
+```{r}
+library(tidyverse)
+```
+```{r}
+library(BTYDplus)
+```
+```{r}
+library(readxl)
+```
+```{r}
+library(dplyr)
+```
+
+
+I then uploaded all of the files using the files pane in R studio. I will now create data frames that are a copy of the files.
+
+```{r}
+Cust <- read_excel("/cloud/project/CBA_lens1/CustomersData.xlsx")
+```
+```{r}
+Discount.data <- read.csv("/cloud/project/CBA_lens1/Discount_Coupon.csv")
+```
+```{r}
+Marketing_spend <- read.csv("/cloud/project/CBA_lens1/Marketing_Spend.csv")
+```
+```{r}
+Online_sales <- read.csv("/cloud/project/CBA_lens1/Online_Sales.csv")
+```
+```{r}
+Tax <- read_excel("/cloud/project/CBA_lens1/Tax_amount.xlsx")
+```
+
+
+# 2. Data cleaning
+The first step of any project is to ensure that the data you are working with is clean. However, the data for this project was delivered in a clean state. Therefore, no further cleaning is necessary.
+
+```{r}
+str(Cust)
+```
+I will check a few aspects of the data. 
+
+```{r}
+max(Cust$Tenure_Months)
+min(Cust$Tenure_Months)
+```
+The max and minimun tenures make sense.
+```{r}
+length(unique(Cust$CustomerID))
+length(Cust$CustomerID)
+unique(Cust$Gender)
+```
+This shows all ID's are unique, and only M and F appear under gender.
+
+```{r}
+str(Discount.data)
+```
+```{r}
+length(unique(Discount.data$Month))
+```
+There are only 12 months included as row values.
+```{r}
+unique(Discount.data$Product_Category)
+unique(Discount.data$Coupon_Code)
+unique(Discount.data$Discount_pct)
+```
+There are 17 product categories. The discounts and codes all seem correct.
+
+
+
+```{r}
+str(Marketing_spend)
+```
+```{r}
+length(unique(Marketing_spend$Date))
+max(Marketing_spend$Offline_Spend)
+min(Marketing_spend$Offline_Spend)
+max(Marketing_spend$Online_Spend)
+min(Marketing_spend$Online_Spend)
+```
+There are 365 unique dates, and the max and min spend values all seem reasonable.
+
+
+```{r}
+str(Online_sales)
+Online_sales$Transaction_Date <- dmy(Online_sales$Transaction_Date)
+Online_sales$Transaction_Date <- format(Online_sales$Transaction_Date, format = "%d/%m/%Y")
+```
+
+```{r}
+max(Online_sales$Transaction_Date)
+min(Online_sales$Transaction_Date)
+unique(Online_sales$Product_Category)
+```
+There are 20 product categories here, as opposed to the 17 recorded in the discount data. This set has "Fun", "Backpacks", "Google", "More Bags", and no "Notesbooks". This should not cause any future issues.
+```{r}
+str(Tax)
+```
+```{r}
+unique(Tax$Product_Category)
+max(Tax$GST)
+min(Tax$GST)
+```
+The same number of categories for both tax and sales is correct. The min and max GST amount seems correct.
+
+# 3. Caculation of spending
+
+The first job is to work out the spend for each transaction, which is the average price times the quantity, minus the discount percent, to which GST is added, and then a delivery charge.
+
+I will create a specific data frame to help with the caculation of this.
+
+I need to add the discount percentage to a frame with the data from the Online_sales data. As the discount data is in months and categories, I need to ensure that the sales frame has these columns. I added months to this data based on the transaction date. 
+
+```{r}
+Online_sales$Month <- month(Online_sales$Transaction_Date)
+```
+I then changed the months in the discount data to be numerical form
+```{r}
+month_abbreviations <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun","Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+month_numbers <- 1:12
+```
+
+```{r}
+
+names(Discount.data)[names(Discount.data) == "Month"] <- "MonthChr"
+```
+```{r}
+Discount.data$Month <- month_numbers[match(Discount.data$MonthChr, month_abbreviations)]
+```
+
+There is now both a month and a category field in both the online sales fram and the discount frame. I can now join the frames.
+
+```{r}
+Caculation_spending_field <- Online_sales %>%
+  left_join(Discount.data, by = c("Product_Category","Month"))
+```
+
+We now have a new frame with data from both the sales frame and also the discount frame.
+
+
+We can now caculate step one, which is the avg price times the quantity.
+
+```{r}
+Caculation_spending_field$QantxPrice <- Caculation_spending_field$Quantity * Caculation_spending_field$Avg_Price
+```
+
+We then need to take off the discount percentage of the price. The code is written so that only customers who used thier coupons will have the discount applied.
+
+```{r}
+Caculation_spending_field <- transform(Caculation_spending_field,QxP_D = QantxPrice - ifelse(Coupon_Status == "Used",(Discount_pct/100) * QantxPrice,0))
+```
+
+There is now a column with the discounted prices. We now need to add tax along with delivery fees. The tax frame will need to be joined.
+
+The tax is joined using the Product_category column name which is present in both data frames.
+
+```{r}
+Caculation_spending_field <- Caculation_spending_field %>%
+  left_join(Tax, by = c("Product_Category"))
+```
+
+The GST amount is now in the Caculation data frame, which can be added to the purchase amount.
+```{r}
+Caculation_spending_field <- transform(Caculation_spending_field,P_Tax = QxP_D*(1+GST))
+```
+
+The price now also factors in the GST amount. The last detail is to add delivery costs. 
+
+```{r}
+Caculation_spending_field <- transform(Caculation_spending_field,Final_price = P_Tax + Delivery_Charges)
+```
+
+We now have the price that the customer paid.
+
+
+## 4. Transform from event to customer-by-sufficient-statistic
+
+I will now create a frame with only the relvent data for the first lens of the customer based audit. 
+
+```{r}
+Lens1_sales<-Caculation_spending_field[,c("CustomerID","Transaction_Date", "Final_price")]
+```
+
+I then need to change the names of the CustomerID field to Cust, transaction date to date, and Final_price to sales, as the BTYDpro package requires this for the following function to work.
+
+```{r}
+names(Lens1_sales)[names(Lens1_sales) == "CustomerID"] <- "cust"
+
+```
+```{r}
+names(Lens1_sales)[names(Lens1_sales) == "Final_price"] <- "sales"
+```
+```{r}
+names(Lens1_sales)[names(Lens1_sales) == "Transaction_Date"] <- "date"
+```
+
+I then need to convert the date field into the DATE class.
+
+```{r}
+Lens1_sales$date <- as.Date(Lens1_sales$date, format = "%d/%m/%y")
+```
+
+
+This data frame is now ready to convert to a customer-by-sufficient-statistic format. Due to only having 1 year of data, I will not include a holdout period or callibration period. 
+
+```{r}
+Lens1_CBSS <- elog2cbs(Lens1_sales)
+```
+
+Inspecting the data shows multiple fields have NA as a value. Investigation of one of these customers, 12370 showed that they had at least one sales amount in Lens1_sales listed as NA. This frame was taken from Caculation_spending_field. The specific transaction of this customer took place on 26/05/2022.
+
+```{r}
+specific_row <- Caculation_spending_field[Caculation_spending_field$CustomerID == "12370", ]
+```
+
+From this it is clear that the issue was that when there was no Discount percentage, the rest of the caculated fields after that returned as NA.
+
+I will go back and fix that now.
+
+First by deleting all of the frames that have been affected.
+
+```{r}
+rm(specific_row)
+rm(Lens1_CBSS)
+rm(Lens1_sales)
+```
+I will then rewrite the discount caculation.
+
+```{r}
+Caculation_spending_field <- transform(Caculation_spending_field,
+                                       QxP_D = QantxPrice - ifelse(is.na(Discount_pct), 0, (Discount_pct/100) * QantxPrice))
+```
+
+We can now see if there are any NA values in the field QxP_D, and others.
+
+```{r}
+sum(is.na((Caculation_spending_field$Quantity)))
+sum(is.na((Caculation_spending_field$Avg_Price)))
+sum(is.na((Caculation_spending_field$QantxPrice)))
+sum(is.na((Caculation_spending_field$QxP_D)))
+sum(is.na((Caculation_spending_field$GST)))
+sum(is.na((Caculation_spending_field$P_Tax)))
+sum(is.na((Caculation_spending_field$Final_price)))
+```
+This shows that there are now 126 NA fields in P_tax and Final price. I will create a data frame with all of these entries to investigate further.
+
+```{r}
+Investigation1 <- Caculation_spending_field[!complete.cases(Caculation_spending_field), ]
+```
+
+The cases that are causing the issues are ones where the coupon status is used, but there is not a recorded possible coupon for that transaction. Further investigation would be necessary, such as how are coupons being used that are not recorded as being avaliable. For this analysis, these entries will be removed from the Caculation_spending_field. This is acceptable due to the small number of transactions, however the source of this problem needs to be investigated.
+
+```{r}
+Caculation_spending_field <- Caculation_spending_field[!is.na(Caculation_spending_field$Final_price), ]
+```
+
+I will now check to see if there are any remaining NA values in the Caculation_spending_field.
+
+```{r}
+sum(is.na((Caculation_spending_field$Quantity)))
+sum(is.na((Caculation_spending_field$Avg_Price)))
+sum(is.na((Caculation_spending_field$QantxPrice)))
+sum(is.na((Caculation_spending_field$QxP_D)))
+sum(is.na((Caculation_spending_field$GST)))
+sum(is.na((Caculation_spending_field$P_Tax)))
+sum(is.na((Caculation_spending_field$Final_price)))
+```
+
+I will now remove and recreate the affected frames.
+
+```{r}
+rm(Lens1_CBSS)
+rm(Lens1_sales)
+```
+
+I will now go back over the code and re create these frames.
+
+I will then check to ensure that there are no remaining NA fields in the CBSS frame.
+
+```{r}
+Lens1_sales<-Caculation_spending_field[,c("CustomerID","Transaction_Date", "Final_price")]
+```
+
+```{r}
+names(Lens1_sales)[names(Lens1_sales) == "CustomerID"] <- "cust"
+
+```
+```{r}
+names(Lens1_sales)[names(Lens1_sales) == "Final_price"] <- "sales"
+```
+```{r}
+names(Lens1_sales)[names(Lens1_sales) == "Transaction_Date"] <- "date"
+```
+
+I then need to convert the date field into the DATE class.
+
+```{r}
+Lens1_sales$date <- as.Date(Lens1_sales$date, format = "%d/%m/%y")
+```
+
+I will then recreate the Lens1_CBSS log.
+```{r}
+Lens1_CBSS <- elog2cbs(Lens1_sales)
+```
+And lastly check for NA values.
+
+```{r}
+sum(is.na(Lens1_CBSS))
+```
+
+The results confirm that there are none. I am now ready to start creating the first graph.
+
+# 5. Distribution of total spend
+
+I will firstly create the bins that I want the data to fall into. This is the same as shown in The customer base audit. Each of the bins will be 250 spending increments, up to 15,000.
+
+```{r}
+bins <- c(seq(0, 15000, by = 250))
+```
+
+I will now  cap the values of the sales, which will not impact the graph.I tried a variety of values starting with 1,000, however this was far to low. $15,000 being the final bin looks okay.
+
+```{r}
+Lens1_CBSS$capped_sales <- ifelse(Lens1_CBSS$sales > 15000, 15000, Lens1_CBSS$sales)
+```
+
+
+I then create a percentage column, which involves a number of steps to ensure that the bin sizes and labels are correct.
+
+```{r}
+bin_width <- 250
+max_value <- ceiling(max(Lens1_CBSS$capped_sales) / bin_width) * bin_width
+```
+```{r}
+bins <- seq(0, max_value, by = bin_width)
+
+```
+```{r}
+bin_labels <- paste0("(", bins[-length(bins)], ", ", bins[-1], "]")
+bin_labels <- gsub("[(]\\d+, ", "(", bin_labels)
+```
+```{r}
+Lens1_CBSS <- Lens1_CBSS %>%
+  mutate(
+    sales_bin = cut(capped_sales, breaks = bins, labels = bin_labels, include.lowest = TRUE)
+  )
+```
+```{r}
+head(Lens1_CBSS)
+```
+
+I will then caculate each bins percentage and put this into a new frame which can be visualised. Firstly, I will caculate the total number of customers listed, and then caculate the percentage for each bin.
+```{r}
+total <- nrow(Lens1_CBSS)
+```
+```{r}
+hist_data <- Lens1_CBSS %>%
+  group_by(sales_bin) %>%
+  summarise(count = n()) %>%
+  mutate(percent = (count / total) * 100)
+```
+I also want to add mean and medium spending to the graph, which I will now caculate.
+
+```{r}
+mean_avg_spend <- round(mean(Lens1_CBSS$sales))
+medium_avg_spend <-round(median(Lens1_CBSS$sales))
+```
+
+
+I can now visualise this using a histogram.
+
+```{r}
+ggplot(hist_data, aes(x = sales_bin, y = percent)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Distribution of total spend across all individuals 
+       making at least 1 purchase in 2020",
+       x = "
+       Spending ($)",
+       y = "% customers") +
+  scale_x_discrete(breaks = hist_data$sales_bin[seq(1, nrow(hist_data), by = 4)]) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  annotate("text", x = 30, y = 6.5, 
+           label = paste("Mean:", mean_avg_spend), 
+           hjust = -0.1, vjust = 0.5, color = "black") +
+  annotate("text", x = 30, y = 7, 
+           label = paste("Median:", medium_avg_spend), 
+           hjust = -0.1, vjust = -0.5, color = "black")
+```
+This graph shows right skewed distriubtion, which is true for alll graphs of the same data. It shows spending leveling off, with a large jump up to 2.5% for customers who spend over $15,000. The data shows that 66% of customers spend less than the mean, which is once again very similar to the figue shown in "The Customer Audit".
+
+# 6. Distribution of Transactions
+
+The Lens1_CBSS frame includes a column of the number of repeat purchases (x). I will therefore create a new column, number of purchases, by adding one to this amount.
+
+```{r}
+Lens1_CBSS$transactions <- Lens1_CBSS$x + 1
+```
+
+To help determine the bin counts, we will determine the min and max values.
+
+```{r}
+min(Lens1_CBSS$transactions)
+max(Lens1_CBSS$transactions)
+```
+We will now create the data which we can then graph.
+
+
+```{r}
+bin_width_2 <- 1
+max_value_2 <- 10
+```
+```{r}
+bins_2 <- c(seq(0, max_value_2, by = bin_width_2), Inf)
+
+```
+```{r}
+bin_labels_2 <- paste0("(", bins_2[-length(bins_2)], ", ", bins_2[-1], "]")
+bin_labels_2 <- gsub("[(]\\d+, ", "(", bin_labels_2)
+```
+```{r}
+Lens1_CBSS <- Lens1_CBSS %>%
+  mutate(
+    transactions_bin = cut(transactions, breaks = bins_2, labels = bin_labels_2, include.lowest = TRUE)
+  )
+```
+
+I will then create a frame showing the bin count and percentage. Note that the total number of customers has already been caculated.
+
+```{r}
+hist_data_2 <- Lens1_CBSS %>%
+  group_by(transactions_bin) %>%
+  summarise(count = n()) %>%
+  mutate(percent = (count / total) * 100)
+```
+
+I will then caculate the mean and medium number of transactions.
+
+```{r}
+mean_avg_transactions <- round(mean(Lens1_CBSS$transactions),2)
+median_avg_transactions <-round(median(Lens1_CBSS$transactions),2)
+```
+
+I will then create the graph.
+
+```{r}
+ggplot(hist_data_2, aes(x = transactions_bin, y = percent)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Number of transactions", y = "% of customers") +
+  theme_minimal() + scale_x_discrete(labels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11+" )) +
+  annotate("text", x = 8, y = 30, 
+           label = paste("Mean:", mean_avg_transactions), 
+           hjust = -0.1, vjust = 0.5, color = "black") +
+  annotate("text", x = 8, y = 32, 
+           label = paste("Median:", median_avg_transactions), 
+           hjust = -0.1, vjust = -0.5, color = "black")
+```
+
+Once again this data shows a rightward skew, with the mean higher than the median. It also once again shows that 74% of customers have less transactions than the average number of transactions. Customers with a high number of purchases are increaing this mean.
+
+# 7.Distribution of average spend
+
+I will now show the distribution of average spend for customers of this business. 
+
+Firstly, I will create a col in the Lens1_CSBB data to show the average spend. I will then create bins, and from that caculate percentages, and then graph the results.
+
+```{r}
+Lens1_CBSS$avg_spend <- Lens1_CBSS$sales/Lens1_CBSS$transactions
+```
+
+I will then place this data into bins.  I will use widths of 200, up to the value of 7,000.
+
+
+```{r}
+bin_width_3 <- 200
+max_value_3 <- 7000
+```
+```{r}
+bins_3 <- c(seq(0, max_value_3, by = bin_width_3), Inf)
+
+```
+```{r}
+bin_labels_3 <- paste0("(", bins_3[-length(bins_3)], ", ", bins_3[-1], "]")
+bin_labels_3 <- gsub("[(]\\d+, ", "(", bin_labels_3)
+```
+```{r}
+Lens1_CBSS <- Lens1_CBSS %>%
+  mutate(
+    avg_spend_bin = cut(avg_spend, breaks = bins_3, labels = bin_labels_3, include.lowest = TRUE)
+  )
+```
+I will then create a frame showing the bin count and percentage. Note that the total number of customers has already been caculated.
+
+```{r caculating transaction percentage}
+Lens_2_graph_data_3 <- Lens_2_CBSS %>%
+  group_by(period, transactions_bin) %>%
+  summarise(count = n_distinct(cust)) %>%
+  left_join(total_customers, by = "period") %>%
+  mutate(percent = (count / total) * 100)
+```
+
+I will then caculate the mean and medium number of transactions, along with the number of customers below the mean.
+
+```{r}
+mean_avg_spend <- round(mean(Lens1_CBSS$avg_spend),2)
+median_avg_spend <-round(median(Lens1_CBSS$avg_spend),2)
+num_customers_below__spend_avg <- sum(Lens1_CBSS$avg_spend < mean_avg_spend)
+```
+
+```{r}
+ggplot(hist_data_3, aes(x = avg_spend_bin, y = percent)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Average spend per transaction ($)", y = "% of customers") +
+  scale_x_discrete(labels = bin_labels) + scale_x_discrete(breaks = hist_data_3$avg_spend_bin[seq(1, nrow(hist_data_3), by = 3)])+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  annotate("text", x = 20, y = 7.5, 
+           label = paste("Mean:", mean_avg_spend), 
+           hjust = -0.1, vjust = 0.5, color = "black") +
+  annotate("text", x = 20, y = 8, 
+           label = paste("Median:", median_avg_spend), 
+           hjust = -0.1, vjust = -0.5, color = "black")
+```
+
+Once again, this graph shows a rigthward skew. The last bin includes values over 7,000. Also, 950 (65%) of customers have a below average spend per transaction.
+
+# 8. Combination table
+
+To see how the average spend per transaction and number of transactions relate, we will create a table with shows the mean and median average spend per transaction for each bin of transaction level
+
+```{r}
+Combination_table_8 <- Lens1_CBSS %>%
+  group_by(transactions_bin) %>%
+  summarise(
+    mean_avg_spend = round(mean(avg_spend, na.rm = TRUE), 2),
+    median_avg_spend = round(median(avg_spend, na.rm = TRUE), 2)
+  )
+print(Combination_table_8)
+```
+To present this table I will laod a new package.
+
+```{r}
+library(knitr)
+```
+```{r}
+install.packages("kableExtra")
+```
+```{r}
+library(kableExtra)
+```
+
+
+```{r}
+Combination_table_8 <- Combination_table_8 %>%
+  rename(
+    Number_of_transactions = transactions_bin)
+```
+
+
+```{r}
+kable(Combination_table_8, col.names = c("Number_of_transactions", "Mean Avg Spend", "Median Avg Spend"), 
+      caption = "Summary Statistics of Average Spend by Transaction Bin")
+```
+I wil first rotate the data.
+
+```{r}
+Combination_table_8_long <- Combination_table_8 %>%
+  tidyr::pivot_longer(cols = c(mean_avg_spend, median_avg_spend),
+                      names_to = "avg_type", values_to = "avg_value")
+```
+
+```{r}
+ggplot(Combination_table_8_long, aes(x = Number_of_transactions, y = avg_value, fill = avg_type)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  labs(x = "Number of transactions", y = "Dollar amount($)", 
+       title = "Mean and Median Average Spend by 
+       number of transactions",
+       fill = "Average Type") +
+  scale_fill_manual(values = c("mean_avg_spend" = "blue", "median_avg_spend" = "red")) +
+  theme_minimal()+ scale_x_discrete(labels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11+" ))
+```
+This chart shows an interesting spead of mean avg spend for different groups in terms of number of transactions. Unlike "The Customer Base Audit", our data does not show falling values as you move across. It is much more random than that.
+
+
+# 9. Distribution of profit
+
+The provided data lacked any information on product costs. Therefore, to complete the next aspect of Lens 1, I asked ChatGPT to create profit margins for each product category. The process would be practically identical if using actual company data, but it would be on the product level not the category level.
+
+I will pull every product category name with the following code.
+
+```{r}
+unique(Online_sales$Product_Category)
+```
+
+I will then copy these into ChatGTP, to get profit margins on each product
+I will then create a frame with this information.
+
+```{r}
+profit_margins <- data.frame(
+  Product_Category = c(
+    "Nest-USA", "Office", "Apparel", "Bags", "Drinkware", "Lifestyle",
+    "Notebooks & Journals", "Headgear", "Waze", "Fun", "Nest-Canada",
+    "Backpacks", "Google", "Bottles", "Gift Cards", "More Bags", "Housewares",
+    "Android", "Accessories", "Nest"
+  ),
+ profit_margin = c(
+    0.30, 0.25, 0.20, 0.25, 0.40, 0.35,
+    0.30, 0.25, 0.30, 0.40, 0.30,
+    0.25, 0.50, 0.40, 0.05, 0.25, 0.35,
+    0.50, 0.35, 0.30
+  )
+)
+```
+
+I will now join this frame in the caculation spending field so that I can caculate profit for each transaction, and then make this into a CBSS log. 
+
+```{r}
+Caculation_spending_field <- left_join(Caculation_spending_field, profit_margins, by = "Product_Category")
+```
+
+I will check to ensure that there are no null values.
+
+```{r}
+na_rows <- Caculation_spending_field[is.na(Caculation_spending_field$profit_margin), ]
+print(na_rows) 
+```
+
+
+I will then take that value and times it by the price of the product. This is the profit made on each item.
+
+```{r}
+
+  Caculation_spending_field$item_profit <- Caculation_spending_field$Avg_Price * Caculation_spending_field$profit_margin
+```
+
+I then take that value, and minus it from the avg price to determine the amount of the avg price which is cost. I then take that value off the final price to work out the transaction profit. I am also going to remove delivery revenue, and assume that this businesses does not make any profit of delivery.
+```{r}
+Caculation_spending_field$Transaction_profit <- Caculation_spending_field$Final_price - (Caculation_spending_field$Avg_Price - Caculation_spending_field$item_profit) - Caculation_spending_field$Delivery_Charges
+```
+
+It is important to understand what this value is. It is the price consumers paid for the product, less the product cost (profit margin), less the discount consumers got, with GST added. Delivery charges have not been included, as I have assumed that there is no profit margin on delivery. The exact caculation will vary between businesses, however the process will be very similar. Other costs could be assinged, such as marketing costs. I have not in this example.
+
+Now that I have profit for each transaction, I will create a data frame with the relevant data.
+
+```{r}
+Lens1_profit <- Caculation_spending_field[, c("CustomerID", "Transaction_Date", "Transaction_profit")]
+```
+
+I will now change the col names so the conversion can occur, howver I will remember that this is profit not sales.
+
+```{r}
+names(Lens1_profit)[names(Lens1_profit) == "CustomerID"] <- "cust"
+names(Lens1_profit)[names(Lens1_profit) == "Transaction_Date"] <- "date"
+names(Lens1_profit)[names(Lens1_profit) == "Transaction_profit"] <- "sales"
+```
+I will also change the class of the date field to date.
+
+```{r}
+Lens1_profit$date <- as.Date(Lens1_profit$date)
+```
+
+
+I will now convert this into a CBSS.
+
+```{r}
+Profit_CBSS <- elog2cbs(Lens1_profit)
+```
+
+I will check to ensure that there are no NA values.
+
+```{r}
+colSums(is.na(Profit_CBSS))
+```
+There are no NA values.
+
+I will now set up to graph this data.
+
+```{r}
+bin_width_9 <- 200
+max_value_9 <- 7000
+```
+
+```{r}
+bins_9 <- c(seq(0, max_value_9, by = bin_width_9), Inf)
+
+```
+```{r}
+bin_labels_9 <- paste0("(", bins_9[-length(bins_9)], ", ", bins_9[-1], "]")
+bin_labels_9 <- gsub("[(]\\d+, ", "(", bin_labels_9)
+```
+```{r}
+Profit_CBSS <- Profit_CBSS %>%
+  mutate(
+    cust_profit_bin = cut(sales, breaks = bins_9, labels = bin_labels_9, include.lowest = TRUE)
+  )
+```
+I will then create a frame showing the bin count and percentage. Note that the total number of customers has already been caculated.
+
+```{r}
+hist_data_9 <- Profit_CBSS %>%
+  group_by(cust_profit_bin) %>%
+  summarise(count = n()) %>%
+  mutate(percent = (count / total) * 100)
+```
+
+I will then caculate the mean and medium profit, along with the number of customers below the mean. Remember that the sales field is showing profit.
+
+```{r}
+mean_cust_profit <- round(mean(Profit_CBSS$sales),2)
+median_cust_profit <-round(median(Profit_CBSS$sales),2)
+num_customers_below__mean_cust_profit <- sum(Profit_CBSS$sales < mean_cust_profit)
+```
+
+```{r}
+ggplot(hist_data_9, aes(x = cust_profit_bin, y = percent)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Profit per customer", y = "% of customers", title = "Distribution of Customer Profit") +
+  scale_x_discrete(labels = bin_labels) + scale_x_discrete(breaks = hist_data_9$cust_profit_bin[seq(1, nrow(hist_data_9), by = 3)])+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  annotate("text", x = 20, y = 7.5, 
+           label = paste("Mean:", mean_cust_profit), 
+           hjust = -0.1, vjust = 0.5, color = "black") +
+  annotate("text", x = 20, y = 8, 
+           label = paste("Median:", median_cust_profit), 
+           hjust = -0.1, vjust = -0.5, color = "black")
+```
+
+The last column shows customers whose profit was over $7,000. The mean is almost twice the value of the median, showing heavy right skewed data. No values were below 0, which may be due to insufficient cost allocation. It is expected that some customers are loss making. 1024 (70%) of customers make the business less profit than the mean. This graph confirms that there is a small number, around 4% of very valuable customers, who each made the business over 7,000 last year. 
+
+# 10. Average profit margin
+
+I already have product margin amounts for each transaction. I will now change this into CBSS layout
+
+```{r}
+average_profit_margin <- Caculation_spending_field %>%
+  group_by(CustomerID) %>%
+  summarize(avg_profit_margin = mean((profit_margin * 100), na.rm = TRUE))
+```
+
+I will then create the relevant bins.
+```{r}
+bin_width_10 <- 5
+max_value_10 <- 45
+```
+
+
+```{r}
+bins_10 <- c(seq(0, max_value_10, by = bin_width_10))
+
+```
+```{r}
+bin_labels_10 <- paste0("(", bins_10[-length(bins_10)], ", ", bins_10[-1], "]")
+bin_labels_10 <- gsub("[(]\\d+, ", "(", bin_labels_10)
+```
+```{r}
+average_profit_margin <- average_profit_margin %>%
+  mutate(
+    profit_margin_bin = cut(avg_profit_margin, breaks = bins_10, labels = bin_labels_10, include.lowest = TRUE)
+  )
+```
+I will then create a frame showing the bin count and percentage. Note that the total number of customers has already been caculated.
+
+```{r}
+hist_data_10 <- average_profit_margin %>%
+  group_by(profit_margin_bin) %>%
+  summarise(count = n()) %>%
+  mutate(percent = (count / total) * 100)
+```
+
+I will then caculate the mean and medium margins, along with the number of customers below the mean. 
+
+```{r}
+mean_profit_margin <- round(mean(average_profit_margin$avg_profit_margin),2)
+median_profit_margin <-round(median(average_profit_margin$avg_profit_margin),2)
+num_customers_below__mean_profit_margin <- sum(average_profit_margin$avg_profit_margin < mean_profit_margin)
+```
+
+I will now present a graph showing the distribution of profit margins. This graph shows a lot of similarity, which is mostly due to a lack of cost data. 
+
+```{r}
+ggplot(hist_data_10, aes(x = profit_margin_bin, y = percent)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Average profit margin", y = "% of customers", title = "Distribution of average margins") +
+  scale_x_discrete(labels = c("20%", "25%", "30%", "35%", "40%")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  annotate("text", x = 3.5, y = 50, 
+           label = paste("Mean:", mean_profit_margin), 
+           hjust = -0.1, vjust = 0.5, color = "black") +
+  annotate("text", x = 3.5, y = 53, 
+           label = paste("Median:", median_profit_margin), 
+           hjust = -0.1, vjust = -0.5, color = "black")
+```
+
+This graph shows that in our example, there are some customers who have higher average margins than other customers. With real data, there would be a much larger spread, and most likely some customers with negative margins. 
+
+# 11 Decile Analysis
+
+I will now create a table which combines a lot of the previous caculations. I will break customers into deciles on the basis of profit.
+
+```{r}
+Profit_CBSS$decile <- ntile(-Profit_CBSS$sales, 10)
+```
+
+I will then change the sales col into a profit col and delete the sales col.
+
+```{r}
+Profit_CBSS$Profit <- Profit_CBSS$sales
+```
+```{r}
+Profit_CBSS$sales <- NULL
+```
+
+I will then caculate the number of transactions by add 1 to col X, which shows the number of repeat transactions.
+```{r}
+Profit_CBSS$number_of_transactions <- Profit_CBSS$x +1
+```
+I will then merge with the Lens1_CBSS to add the sales to this data frame.
+
+```{r}
+Profit_CBSS <- merge(Profit_CBSS, Lens1_CBSS[, c("cust", "sales")], by = "cust", all.x = TRUE)
+```
+
+I will now create a new data frame that is grouped by customer deciles.
+
+```{r}
+Summary_1 <- Profit_CBSS %>%
+  select(decile, Profit, number_of_transactions, sales, cust)%>%
+  group_by(decile)%>%
+  summarise_all(list(sum=sum))
+  
+```
+
+I will then caculate the number of customers in each decile, and add that to the frame
+
+```{r}
+decile_counts <- Profit_CBSS %>%
+  group_by(decile) %>%
+  summarise(num_customers = n())
+```
+```{r}
+Summary_1 <- merge(Summary_1, decile_counts, by = "decile")
+```
+
+
+Now I will create columns of data that shows the percentages of customers, transactions, revenue and profit of each decile.
+
+```{r}
+Summary_1$"%customers" <- round((Summary_1$num_customers/sum(Summary_1$num_customers))*100, 2)
+```
+```{r}
+Summary_1$"%transactions" <- 
+  round((Summary_1$number_of_transactions/sum(Summary_1$number_of_transactions))*100, 2)
+```
+```{r}
+Summary_1$"%revenue" <- 
+  round((Summary_1$sales/sum(Summary_1$sales))*100, 2)
+```
+```{r}
+Summary_1$"%profit" <- 
+  round((Summary_1$Profit/sum(Summary_1$Profit))*100, 2)
+```
+
+I will now display this frame as a table, using the kableExtra package. First I will create a summary shorten the names of some of the columns, and also remove one irrelevant col.
+
+```{r}
+Summary_1$cust_sum = NULL
+```
+
+
+```{r}
+Summary_1 <- Summary_1 %>%
+  rename(
+    Profit = Profit_sum,
+    transactions = number_of_transactions_sum,
+    Revenue = sales_sum,
+    '%cust' = '%customers',
+    '%trans' = '%transactions',
+    '%rev' = '%revenue',
+  )
+```
+
+
+I will then show the table
+```{r}
+kable(Summary_1, caption = "Summary of customer's broken in deciles based on profit contribution", col.names = c("decile","Profit",  "transactions", "Revenue", "%cust","%trans","%rev","%profit", "num_customers"))
+```
+
+This table shows a summary of the customer base of this business. You can see that 63% of the profit comes from 20% of the customers, which means that the remaining 37% of the businesses profit comes from 80% of it's customers. However, that 20% of customers only makes up 36% of transactions. The bottom decile only contributes 0.13% of the profit, and yet makes 5.24% of the transactions. If all of the transaction costs were included, this decile may become a loss making decile for this business. Some customers are worth more than others, and business strategy needs to relect this fact. Treating all customers equally is bad strategy, because that is not reflective of reality.
+
+#12 Decomposition of customer level deciles
+
+I will further consider these groups in terms of what is causing the higher profits in the top 20% of customers.
+
+I will show average spend,average profit per customer, average order value, Average order frequency, and Avg Margin. I will do this in summary_2, and first copy the necessary information from summary_1.
+
+```{r}
+Summary_2 <- Summary_1[, c('decile', '%cust', '%profit')]
+```
+
+
+```{r}
+Summary_2$avg_spend_per_cust <- Summary_1$Revenue/Summary_1$num_customers
+```
+```{r}
+Summary_2$avg_profit_per_cust <- Summary_1$Profit/Summary_1$num_customers
+```
+```{r}
+Summary_2$avg_order_value <- Summary_1$Revenue/Summary_1$transactions
+```
+```{r}
+Summary_2$avg_margin <- ((Summary_1$Profit/Summary_1$Revenue)*100)
+```
+```{r}
+Summary_2$avg_order_frequency <- Summary_1$transactions/Summary_1$num_customers
+```
+
+I will now also print the expanded  table
+
+```{r}
+kable(Summary_2, caption = "Summary of customer's broken in deciles based on profit contribution", col.names = c("decile", "%cust", "%profit", "avg_spend_per_cust", 
+"avg_profit_per_cust", "avg_order_value", "avg_margin","avg_order_frequency"))
+
+```
+
+As this table shows the most valuable customers order much more often than other customers, with a higher order value each time. These customers also have a higher margin. All of these factors contribute to this decile containing the highest value customers. The last 3 deciles drop in margins very fast, with the drop of (17%) being greater that of the top to the 7th decile (13%). With only $25 of profit, further analysis would be required to determine if the bottom decile customers are profitable.
+
+# 13 Segment analysis
+
+I am now going to investigate the deciles further, and try to understand any characteristics of the groups which may prove useful to marketing strategy. I will use gender and the percentage of transactions which used coupons. Further analysis could be conducted in the same manner, if more data is avaliable.
+
+## 13.1 Gender
+
+I will first merge the cust frame to the profit CBSS frame so that I can breakdown each docile in terms of gender.
+
+I first need to change the name of CustomerID to Cust.
+```{r}
+Cust <- Cust %>%
+  rename(cust = CustomerID)
+```
+```{r}
+Profit_CBSS <- merge(Profit_CBSS, Cust, by = "cust")
+```
+
+I can then count the customers by decile and gender.
+
+```{r}
+gender_makeup <- Profit_CBSS %>%
+  group_by(decile, Gender) %>%
+  summarise(count = n(), .groups = 'drop')
+```
+I can then show the percentages
+
+```{r}
+gender_makeup <- gender_makeup %>%
+  mutate(percentage = (count / Summary_1$num_customers) * 100)
+print(gender_makeup)
+```
+
+Although there does not appear to be a clear cut difference in terms of gender, it does appear that the higher value deciles have a higher percentage of men than the lower deciles. Women make up the largest percentage in all deciles.
+
+Regression analysis could be helpful to quantify this relationship.
+
+I will first create a frame that shows the decile, its profit per customer, and the percentage of men.
+
+```{r}
+reg.analysis.1 <- gender_makeup %>%
+  filter(Gender == "M")
+```
+
+I will then add the avg_profit_ per customer to this frame, but first I will create a subset of the summary data including on the decile and avg profit.
+
+```{r}
+summary_subset <- Summary_2%>%
+  select(decile, avg_profit_per_cust)
+```
+
+```{r}
+reg.analysis.1 <- merge(reg.analysis.1, summary_subset, by = "decile")
+```
+
+I can now show the correlation between the percentage of men and the average profit per customer.
+
+```{r}
+correlation_1 <- cor(reg.analysis.1$percentage, reg.analysis.1$avg_profit_per_cust)
+print(correlation_1)
+```
+The results show moderate, positive correlation. It is therefore justifiable to say that as the percentage of men in the decile increase, so does the average profit per customer. Further analysis could be conducted to determine why this is the case, which could further inform future marketing planning.
+
+## 13.2 Coupons
+
+I will first input decile numbers for profit into the online sales frame.
+
+I will do this by merging the decile numbers by customer ID, which will require both frames (Profit_CBSS and Online_sales) to have a cust field.
+
+```{r}
+colnames(Online_sales)[colnames(Online_sales) == "CustomerID"] <- "cust"
+
+```
+I can now merge the frames. There decile's are the profit deciles of 147/146 customers, where decile 1 are the most valuable customers in terms of profit.
+```{r}
+Online_sales <- merge(Online_sales, Profit_CBSS[, c("cust", "decile")], by = "cust", all.x = TRUE)
+```
+I will then sum and group by decile, then coupon status. 
+```{r}
+coupon_analysis <- Online_sales %>%
+  group_by(decile, Coupon_Status) %>%
+  summarise(count = n(), .groups = 'drop')
+print(coupon_analysis)
+```
+I will then undertake corelation analysis to see if coupon usage is related to average_customer_profitability by decile number. 
+
+Before I do that, however, there is a clear decrease in all coupon measurements as the deciles decrease. This tends to indicate that coupons are a reasonable strategy to reward loyalty customers.
+```{r}
+Clicked_analysis <- coupon_analysis[coupon_analysis$Coupon_Status == "Clicked",]
+```
+```{r}
+Clicked_analysis <- Clicked_analysis%>%
+  mutate(percentage = (count / sum(count)) * 100)
+```
+```{r}
+not_used_analysis <- coupon_analysis[coupon_analysis$Coupon_Status == "Not Used",]
+```
+```{r}
+not_used_analysis <- not_used_analysis%>%
+  mutate(percentage = (count / sum(count)) * 100)
+```
+```{r}
+used_analysis <- coupon_analysis[coupon_analysis$Coupon_Status == "Used",]
+```
+```{r}
+used_analysis <- used_analysis%>%
+  mutate(percentage = (count / sum(count)) * 100)
+```
+
+```{r}
+used_percentage <- kable(used_analysis)
+print(used_percentage)
+```
+```{r}
+not_used_percentage <- kable(not_used_analysis)
+print(not_used_percentage)
+```
+```{r}
+clicked_percentage <- kable(Clicked_analysis)
+print(clicked_percentage)
+```
+This shows the results more clearly. Remember that the top 20% of customers were responsible for 63% of the profit. What this analysis shows is that those same 20% of customers click on 53% of the coupons that are clicked on, and use 53% of the coupons that are used. The customers who are responsible for only 37% of the businesses revenue, are using 47% of the coupons. This may indicate that coupons are not being targeted as effectively as possible, if a business is aiming to be customer centric. The bottom decile which makes 0.13% of the profit, are using almost 1% of the coupons. 
+
+I will now caculate the pearsons correlation for each type of coupon use.
+```{r}
+used_correlation <- cor(used_analysis$decile, used_analysis$count, method = "pearson")
+print(used_correlation)
+```
+```{r}
+not_used_correlation <- cor(not_used_analysis$decile, not_used_analysis$count, method = "pearson")
+print(not_used_correlation)
+```
+```{r}
+Clicked_correlation <- cor(Clicked_analysis$decile, Clicked_analysis$count, method = "pearson")
+print(Clicked_correlation)
+```
+There is strong negative correlcation between deciles and all of the coupons measurements. Further analysis of the same process could be conducted regarding not just profit, but the number of transactions along with the average order value. These could reveal further insights. 
+
+This is where Lens 1 of the customer base audit will end. While there is a lot more insights that could be gained, I have shown my ability to analyses customer level data, and gain valuable insights. This lens provides a deep understanding of how different customers can be, and is the foundation for the next 4 lenses of the customer base audit. Applying these findings to planning and strategy is the first step on the journey to customer centricity.
+
+
+
+
