@@ -1,0 +1,1449 @@
+---
+title: "CBA_lens_2"
+author: "Matthew Noble"
+date: "2024-07-03"
+output:
+  html_document:
+---
+
+# Introduction
+
+This notebook will contain the code to create the second lens of a customer based audit **"What changed since last period"**(Fader, Hardie & Ross, 2022). This lens will help us understand how customers have changed their behavior since the last period, which can inform planning and strategy.
+
+# 1. Packages and data
+I will install and load the following packages and data.
+
+```{r installing tidyverse, message = FALSE}
+suppressPackageStartupMessages( "tidyverse")
+```
+```{r installing BTYDplus, message = FALSE}
+suppressPackageStartupMessages("BTYDplus")
+```
+```{r installing readx1, message = FALSE}
+suppressPackageStartupMessages("readxl")
+```
+```{r installing dplyr, message = FALSE}
+suppressPackageStartupMessages("dplyr")
+```
+```{r installing kableExtra, message = FALSE}
+suppressPackageStartupMessages("kableExtra")
+```
+```{r installing VennDiagram, message = FALSE}
+suppressPackageStartupMessages("VennDiagram")
+```
+```{r installing kable, message = FALSE}
+install.packages("knitr")
+```
+
+```{r installing gridExtra, message = FALSE}
+suppressPackageStartupMessages("gridExtra")
+```
+```{r laoding tidyverse, message = FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+```
+```{r laoding BTYDplus, message = FALSE}
+suppressPackageStartupMessages(library(BTYDplus))
+```
+```{r laoding readx1, message = FALSE}
+suppressPackageStartupMessages(library(readxl))
+```
+```{r laoding dplyr, message = FALSE}
+suppressPackageStartupMessages(library(dplyr))
+```
+```{r laoding kableExtra, message = FALSE}
+suppressPackageStartupMessages(library(kableExtra))
+```
+```{r laoding VennDiagram, message = FALSE}
+suppressPackageStartupMessages(library(VennDiagram))
+```
+```{r laoding gridExtra, message = FALSE}
+suppressPackageStartupMessages(library(gridExtra))
+```
+```{r laoding knitr, message = FALSE}
+suppressPackageStartupMessages(library(knitr))
+```
+I then uploaded all of the data files provided *(Customer data, discount data, marketing spending data, online sales data, and tax data)* using the files pane in R studio. I will now create data frames that are a copy of the files.
+```{r loading Customer data}
+Cust <- read_excel("/cloud/project/CBA_lens1/CustomersData.xlsx")
+```
+```{r loading discount data}
+Discount.data <- read.csv("/cloud/project/CBA_lens1/Discount_Coupon.csv")
+```
+```{r laoding marketing spending data}
+Marketing_spend <- read.csv("/cloud/project/CBA_lens1/Marketing_Spend.csv")
+```
+```{r loading online sales data}
+Online_sales <- read.csv("/cloud/project/CBA_lens1/Online_Sales.csv")
+```
+```{r laoding tax data}
+Tax <- read_excel("/cloud/project/CBA_lens1/Tax_amount.xlsx")
+```
+
+# 2. Data cleaning
+
+Please see the lens 1 analysis where I went through the data cleaning steps.
+
+# 3. Caculation of spending
+
+The first job is to work out the spend for each transaction, which is the average price times the quantity, minus the discount percent, to which GST is added, and then a delivery charge.
+
+I will create a specific data frame to help with the caculation of this.
+
+I need to add the discount percentage to a frame with the data from the Online_sales data. As the discount data is in months and categories, I need to ensure that the sales frame has these columns. I added months to this data based on the transaction date. 
+
+```{r creating a col of just the month}
+Online_sales$Month <- month(Online_sales$Transaction_Date)
+```
+I then created two vectors, one with month abbreviation and one with numbers.
+```{r creating abv and number for months}
+month_abbreviations <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun","Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+month_numbers <- 1:12
+```
+I then changed the names of the month column to MonthChr
+```{r changing name to MonthChr}
+
+names(Discount.data)[names(Discount.data) == "Month"] <- "MonthChr"
+```
+```{r Adding a col with the month numbers}
+Discount.data$Month <- month_numbers[match(Discount.data$MonthChr, month_abbreviations)]
+```
+
+There is now both a month and a category field in both the online sales fram and the discount frame. I can now join the frames.
+
+```{r Joining 2 frames to make the calculation frame}
+Caculation_spending_field <- Online_sales %>%
+  left_join(Discount.data, by = c("Product_Category","Month"))
+```
+
+We now have a new frame with data from both the sales frame and also the discount frame.
+However, similar to Lens 1, there is a number of customers for who our information states that they used a discount, but no discount exists. I will assume that they did not use any discounts, and set the discount rate for any rows that have NA to 0.
+
+```{r changing NA values to 0}
+Caculation_spending_field <- Caculation_spending_field %>%
+  mutate(
+   Coupon_Code = ifelse(is.na(Coupon_Code), 0, Coupon_Code),
+    Discount_pct = ifelse(is.na(Discount_pct), 0, Discount_pct))
+```
+
+
+
+We can now caculate step one, which is the avg price times the quantity.
+
+```{r calculating various information}
+Caculation_spending_field$QantxPrice <- Caculation_spending_field$Quantity * Caculation_spending_field$Avg_Price
+```
+
+We then need to take off the discount percentage of the price. The code is written so that only customers who used thier coupons will have the discount applied.
+
+```{r Applying the discount percentage}
+Caculation_spending_field <- transform(Caculation_spending_field,QxP_D = QantxPrice - ifelse(Coupon_Status == "Used",(Discount_pct/100) * QantxPrice,0))
+```
+
+There is now a column with the discounted prices. We now need to add tax along with delivery fees. The tax frame will need to be joined.
+
+The tax is joined using the Product_category column name which is present in both data frames.
+
+```{r Inserting tax info}
+Caculation_spending_field <- Caculation_spending_field %>%
+  left_join(Tax, by = c("Product_Category"))
+```
+
+The GST amount is now in the Caculation data frame, which can be added to the purchase amount.
+```{r Applying tax}
+Caculation_spending_field <- transform(Caculation_spending_field,P_Tax = QxP_D*(1+GST))
+```
+
+The price now also factors in the GST amount. The last detail is to add delivery costs. 
+
+```{r Caculating the final price}
+Caculation_spending_field <- transform(Caculation_spending_field,Final_price = P_Tax + Delivery_Charges)
+```
+
+We now have the price that the customer paid. 
+
+
+# 4. Caculation of customer by sufficient statistic
+I will being in the Caculation_spending_field, as that frame can be the one from which the first 4 tables are created from.
+
+What is necessary to change is that the data must be split into two periods. Only one year is provided in my data, and so the periods will be 6 months each. This is not ideal, but I do not have another year's worth of data to work with. The steps taken would be virtually identical regardless of the length of period chosen. I will add a label 1 for data that comes before month 7, and 2 for data that comes after this. I will also change the format of it to be numeric.
+
+```{r inserting period labels}
+Caculation_spending_field <- Caculation_spending_field %>%
+  mutate(period = case_when(
+    Month <7 ~ "1",
+    Month >=7 ~ "2"))
+```
+
+```{r changing the str of period}
+Caculation_spending_field$period <- as.numeric(Caculation_spending_field$period)
+```
+
+One of the fields of interest, date, is not in the date format. I will change this now.
+```{r changing the str of date}
+Caculation_spending_field$Transaction_Date <- as.Date(Caculation_spending_field$Transaction_Date, format = "%d/%m/%y")
+```
+
+In order to create a frame which has the spending of customers grouped into periods, I will create 2 frames to create CBSS logs, and then combine them into a single frame, which can then be graphed. 
+
+```{r sales for period 1}
+Lens_2_period_1_sales <- Caculation_spending_field %>%
+  filter(period == 1)%>%
+  select("CustomerID", "Transaction_Date", "Final_price")
+```
+```{r sales for period 2}
+Lens_2_period_2_sales <- Caculation_spending_field %>%
+  filter(period == 2)%>%
+  select("CustomerID", "Transaction_Date", "Final_price")
+```
+
+I will then change the names of the columns to allow for conversion into a CBSS log (cust, date, sales). 
+```{r changing col names 1}
+colnames(Lens_2_period_1_sales) <- c("cust", "date", "sales")
+```
+```{r changing col names 2}
+colnames(Lens_2_period_2_sales) <- c("cust", "date", "sales")
+```
+
+I will then create the CBSS logs.
+```{r creating CBSS logs 1}
+Lens_2_period_1_CBSS <- elog2cbs(Lens_2_period_1_sales)
+```
+```{r creating CBSS logs 2}
+Lens_2_period_2_CBSS <- elog2cbs(Lens_2_period_2_sales)
+```
+I will check for NA values in each log.
+```{r checking for NA values 1}
+sum(is.na(Lens_2_period_1_CBSS))
+```
+```{r checking for NA values 2}
+sum(is.na(Lens_2_period_2_CBSS))
+```
+I will then add the period lables back into the data.
+```{r adding back period lables 1}
+Lens_2_period_1_CBSS$period <- 1
+```
+```{r adding back period lables 2}
+Lens_2_period_2_CBSS$period <- 2
+```
+I will now combine these frames so that I can create graphs from them.
+```{r combining the CBSS together}
+Lens_2_CBSS <- bind_rows(Lens_2_period_1_CBSS, Lens_2_period_2_CBSS)
+```
+I now have a CBSS log, broken down into two periods.
+
+# 5. Distribution of customer spend
+
+I will firstly create the bins that I want the data to fall into. This is the same as shown in The customer base audit. Each of the bins will be 250 spending increments, up to 10,000.
+
+```{r Bin width and values for cust spend}
+bin_width_1 <- 250
+max_value_1 <- 10000
+```
+```{r bin seq for cust spend}
+bins_1 <- c(seq(0, max_value_1, by = bin_width_1), Inf)
+
+```
+
+I then create bin labels and insert a col which shows which bin each customer falls into. The lables will show the min and max values.
+
+I will then make labels for these bins.
+```{r bin labels for customer spend}
+bin_labels_1 <- paste0(bins_1[-length(bins_1)], "-", bins_1[-1])
+bin_labels_1 <- gsub("-Inf", "+", bin_labels_1)
+bin_labels_1 <- gsub("\\b(\\d+)-", "\\1-", bin_labels_1)
+```
+
+I will then create the bins.
+```{r creating the bins for customer spend}
+Lens_2_CBSS <- Lens_2_CBSS %>%
+  mutate(
+    cust_spend_bin = cut(sales, breaks = bins_1, labels = bin_labels_1, include.lowest = TRUE)
+  )
+```
+
+I will then calculate each bins percentage for each period, and put this into a new frame which can be visualised. Firstly, I will caculate the total number of customers listed, and then calculate the percentage for each bin.
+```{r caculating number of customers in period 1}
+total_period_1 <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  nrow()
+```
+```{r caculating number of customers in period 2}
+total_period_2 <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  nrow()
+```
+```{r creating a frame for graphing}
+Lens_2_graph_data_1 <- Lens_2_CBSS %>%
+  select(cust, cust_spend_bin, period) %>%
+  group_by(period, cust_spend_bin) %>%
+  summarize(count = n(), .groups = 'drop') %>%
+  complete(period, cust_spend_bin = unique(cust_spend_bin), fill = list(count = 0)) %>%
+  group_by(period) %>%
+  mutate(percentage = (count / sum(count)) * 100)
+```
+I will now add the percentage for each bin, for each period.
+
+```{r caculating percentage}
+Lens_2_graph_data_1 <- Lens_2_graph_data_1 %>%
+  group_by(period) %>%
+  mutate(percentage = (count / sum(count)) * 100)
+```
+
+I also want to add mean and medium spending for each period to the graph, which I will now caculate.
+
+```{r caculating means and medians 1}
+period_1_mean_avg_spend <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  summarize(mean_avg_spend = round(mean(sales), 2))
+
+period_1_median_avg_spend <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  summarize(median_avg_spend = round(median(sales), 2))
+```
+```{r caculating means and medians 2}
+period_2_mean_avg_spend <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  summarize(mean_avg_spend = round(mean(sales), 2))
+
+period_2_median_avg_spend <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  summarize(median_avg_spend = round(median(sales), 2))
+```
+Lastly, I will define a custom function so that the labels are more clear.
+```{r customer labels for graph 1}
+custom_labels_1 <- function(labels, breaks) {
+  # Select every third label
+  labels_to_show <- labels[seq(1, length(labels), by = 3)]
+  # Ensure the last label is included
+  if (labels[length(labels)] != labels_to_show[length(labels_to_show)]) {
+    labels_to_show <- c(labels_to_show, labels[length(labels)])
+  }
+  # Adjust the breaks to match the labels length
+  breaks_to_show <- breaks[seq(1, length(breaks), by = 3)]
+  if (breaks[length(breaks)] != breaks_to_show[length(breaks_to_show)]) {
+    breaks_to_show <- c(breaks_to_show, breaks[length(breaks)])
+  }
+  # Ensure the lengths of labels and breaks match
+  if (length(labels_to_show) != length(breaks_to_show)) {
+    stop("The lengths of breaks and labels do not match.")
+  }
+  return(labels_to_show)
+}
+custom_breaks_1 <- function(breaks) {
+  # Select every third break
+  breaks_to_show <- breaks[seq(1, length(breaks), by = 3)]
+  # Ensure the last break is included
+  if (breaks[length(breaks)] != breaks_to_show[length(breaks_to_show)]) {
+    breaks_to_show <- c(breaks_to_show, breaks[length(breaks)])
+  }
+  return(breaks_to_show)
+}
+
+```
+I can now visualise the spending of these customers over the two periods.
+
+```{r creating graph 1, fig.width=12, fig.height=8}
+ggplot(Lens_2_graph_data_1, aes(x = cust_spend_bin, y = percentage, fill = factor (period))) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(title = "Distribution of spending over period",
+       x = "Spending",
+       y = "% customers",
+       fill = "Period") +
+  scale_x_discrete(
+    labels = custom_labels_1(bin_labels_1, bins_1[-length(bins_1)]),
+    breaks = custom_breaks_1(unique(Lens_2_graph_data_1$cust_spend_bin))  # Use the breaks function
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 20),
+        axis.text.y = element_text(size = 20),  # Increase y-axis text size
+       axis.title.y = element_text(size = 20),  # Increase y-axis title size
+        axis.title.x = element_text(size = 20),  # Increase x-axis title size
+        plot.title = element_text(size = 30, face = "bold"),  # Increase plot title size
+        legend.text = element_text(size = 15),  # Increase legend text size
+        legend.title = element_text(size = 20),  # Increase legend title size
+        strip.text = element_text(size = 12)  # Increase facet label text size
+  ) +
+  annotate("text", x = 20, y = 11, 
+           label = paste("Period 1 mean:", period_1_mean_avg_spend),
+           hjust = -0.1, vjust = 0.5, size = 7, color = "black") +
+  annotate("text", x = 20, y = 9, 
+           label = paste("Period 1 median:", period_1_median_avg_spend),
+           hjust = -0.1, vjust = -0.5, size = 7, color = "black") +
+  annotate("text", x = 20, y = 7, 
+           label = paste("Period 2 mean:", period_2_mean_avg_spend), 
+           hjust = -0.1, vjust = 0.5, size = 7, color = "black") +
+  annotate("text", x = 20, y = 5, 
+           label = paste("Period 2 median:", period_2_median_avg_spend), 
+           hjust = -0.1, vjust = -0.5, size = 7, color = "black")
+
+```
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+The two periods show quite similar shapes, however period 2 has a higher mean and median, and that can be seen in the graph. There is a small number of customers in both periods which spend a lot more than other customers. </p>
+
+# 6. Distribution of transactions
+
+The Lens_2_CBSS frame includes a column of the number of repeat purchases (x). I will therefore create a new column, number of purchases, by adding one to this amount.
+
+```{r creating transaction column}
+Lens_2_CBSS$transactions <- Lens_2_CBSS$x + 1
+```
+To help determine the bin counts, I will calculate the min and max values.
+```{r caculating the min and max values}
+min(Lens_2_CBSS$transactions)
+max(Lens_2_CBSS$transactions)
+```
+We will now create the data which we can then graph. I will first create the bins, which will be 1 transaction wide and go up to 10.
+
+
+```{r transaction bin width}
+bin_width_2 <- 1
+max_value_2 <- 5
+```
+```{r transaction total}
+bins_2 <- c(seq(0, max_value_2, by = bin_width_2), Inf)
+
+```
+```{r transaction bin labels}
+bin_labels_2 <- paste0("(", bins_2[-length(bins_2)], ", ", bins_2[-1], "]")
+bin_labels_2 <- gsub("[(]\\d+, ", "(", bin_labels_2)
+```
+```{r creating transaction bins}
+Lens_2_CBSS <- Lens_2_CBSS %>%
+  mutate(
+    transactions_bin = cut(transactions, breaks = bins_2, labels = bin_labels_2, include.lowest = TRUE)
+  )
+```
+
+I will then create a frame showing the bin count and percentage. I first need to caculate the total number of customers for each period.
+```{r caculating total number of customers}
+total_customers <- Lens_2_CBSS %>%
+  group_by(period) %>%
+  summarise(total = n_distinct(cust))
+```
+
+
+```{r caculating transaction percentage}
+Lens_2_graph_data_2 <- Lens_2_CBSS %>%
+  group_by(period, transactions_bin) %>%
+  summarise(count = n_distinct(cust)) %>%
+  left_join(total_customers, by = "period") %>%
+  mutate(percent = (count / total) * 100)
+```
+
+I will then caculate the mean and medium number of transactions for each period.
+
+```{r caculating means and medians transactions 1}
+period_1_mean_avg_transaction <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  summarize(mean_avg_transaction = round(mean(transactions), 2))
+
+period_1_median_avg_transaction <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  summarize(median_avg_transaction = round(median(transactions), 2))
+```
+```{r caculating means and medians transactions 2}
+period_2_mean_avg_transactions <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  summarize(mean_avg_transactions = round(mean(transactions), 2))
+
+period_2_median_avg_transactions <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  summarize(median_avg_transactions = round(median(transactions), 2))
+```
+I will then create the graph.
+
+```{r creating graph 2, fig.width=12, fig.height=8}
+ggplot(Lens_2_graph_data_2, aes(x = transactions_bin, y = percent, fill = factor(period))) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  labs(title = "Distribution of transactions by periods",
+       x = "Transactions",
+       y = "% customers",
+       fill = "Period") +
+  scale_x_discrete(labels = c("1", "2", "3", "4", "5", "6+" )) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 20),
+        axis.text.y = element_text(size = 20),  # Increase y-axis text size
+    axis.title.y = element_text(size = 20),  # Increase y-axis title size
+    axis.title.x = element_text(size = 20),  # Increase x-axis title size
+    plot.title = element_text(size = 30, face = "bold"),  # Increase plot title size
+    legend.text = element_text(size = 15),  # Increase legend text size
+    legend.title = element_text(size = 20),  # Increase legend title size
+    strip.text = element_text(size = 12)  # Increase facet label text size
+        ) +
+   annotate("text", x = 3, y = 50, 
+           label = paste("Period 1 mean:", period_1_mean_avg_transaction),
+           hjust = -0.1, vjust = 0.5, size = 7, color = "black") +
+  annotate("text", x = 3, y = 40, 
+           label = paste("Period 1 median:", period_1_median_avg_transaction),
+           hjust = -0.1, vjust = -0.5, size = 7, color = "black")+
+  annotate("text", x = 3, y = 30, 
+           label = paste("Period 2 mean:", period_2_mean_avg_transactions), 
+           hjust = -0.1, vjust = 0.5, size = 7, color = "black") +
+  annotate("text", x = 3, y = 20, 
+           label = paste("Period 2 median:", period_2_median_avg_transactions), 
+           hjust = -0.1, vjust = -0.5, size = 7, color = "black")
+```
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+This graph shows a very righward skewd data. Almost 60% of the customers in this year only made 1 transaction in period 1 and 2. 
+</p>
+
+
+# 7. Distribution of average spend per transaction
+
+The Lens_2_CBSS data frame already has the transaction levels and the spending levels for each customer, in each period. I will add a new column the calcualates that avg spending per transaction.
+
+```{r calcuate the avg spend per transaction}
+Lens_2_CBSS$avg_spend_per_trans <- Lens_2_CBSS$sales/Lens_2_CBSS$transactions
+```
+I will then place this data into bins.  I will use widths of 200, up to the value of 7,000.
+
+```{r Bin width and values for avg spend}
+bin_width_3 <- 200
+max_value_3 <- 7000
+```
+```{r bin seq for avg spend}
+bins_3 <- c(seq(0, max_value_3, by = bin_width_3), Inf)
+
+```
+I will then make labels for these bins.
+```{r bin labels for avg spend}
+bin_labels_3 <- paste0(bins_3[-length(bins_3)], "-", bins_3[-1])
+bin_labels_3 <- gsub("-Inf", "+", bin_labels_3)
+bin_labels_3 <- gsub("\\b(\\d+)-", "\\1-", bin_labels_3)
+```
+
+I will then create the bins.
+```{r creating the bins for avg spend}
+Lens_2_CBSS <- Lens_2_CBSS %>%
+  mutate(
+    avg_spend_bin = cut(avg_spend_per_trans, breaks = bins_3, labels = bin_labels_3, include.lowest = TRUE)
+  )
+```
+I will then create a frame showing the bin count and percentage. Note that the total number of customers has already been caculated.
+
+```{r creating data frame for avg spend}
+Lens_2_graph_data_3 <- Lens_2_CBSS %>%
+  group_by(period, avg_spend_bin) %>%
+  summarise(count = n_distinct(cust), .groups = 'drop') %>%
+  complete(period, avg_spend_bin = avg_spend_bin, fill = list(count = 0)) %>%
+  left_join(total_customers, by = "period") %>%
+  mutate(percent = (count / total) * 100)
+```
+I will then calculate the mean and medium number of transactions for each period.
+
+```{r caculating means and medians spend per transactions 1}
+period_1_mean_avg_spend_per_transaction <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  summarize(mean_avg_spend_per_transaction = round(mean(avg_spend_per_trans), 2))
+
+period_1_median_avg_spend_per_transaction <- Lens_2_CBSS %>%
+  filter(period == 1) %>%
+  summarize(median_avg_spend_per_transaction = round(median(avg_spend_per_trans), 2))
+```
+```{r caculating means and medians spend per transactions 2}
+period_2_mean_avg_spend_per_transaction <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  summarize(mean_avg_spend_per_transaction = round(mean(avg_spend_per_trans), 2))
+
+period_2_median_avg_spend_per_transaction <- Lens_2_CBSS %>%
+  filter(period == 2) %>%
+  summarize(median_avg_spend_per_transaction = round(median(avg_spend_per_trans), 2))
+```
+I will then create the graph.
+
+
+```{r Define the custom_labels and custom_breaks function}
+custom_labels <- function(labels, breaks) {
+  # Ensure the labels array is the same length as the breaks array
+  labels_to_show <- labels[seq_along(labels) %% 3 == 1]
+  labels_to_show <- c(labels_to_show, labels[length(labels)])
+  # Adjust the breaks to match the labels length
+  breaks_to_show <- breaks[seq_along(breaks) %% 3 == 1]
+  breaks_to_show <- c(breaks_to_show, breaks[length(breaks)])
+  if (length(labels_to_show) != length(breaks_to_show)) {
+    stop("The lengths of breaks and labels do not match.")
+  }
+  return(labels_to_show)
+  }
+  
+custom_breaks <- function(breaks) {
+  breaks_to_show <- breaks[seq_along(breaks) %% 3 == 1]
+  breaks_to_show <- c(breaks_to_show, breaks[length(breaks)])
+  return(breaks_to_show)
+}
+```
+Creating the plot
+```{r creation of graph 3, fig.width=12, fig.height=8}
+ggplot(Lens_2_graph_data_3, aes(x = avg_spend_bin, y = percent, fill = factor(period))) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  labs(
+    title = "Distribution of average spend per transaction by period",
+    x = "Average spend per transaction",
+    y = "% customers",
+    fill = "Period"
+  ) +
+  scale_x_discrete(
+    labels = custom_labels(bin_labels_3, bins_3[-length(bins_3)]),
+    breaks = custom_breaks(unique(Lens_2_graph_data_3$avg_spend_bin))
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 15),  # Increase x-axis text size
+    axis.text.y = element_text(size = 20),  # Increase y-axis text size
+    axis.title.y = element_text(size = 20),  # Increase y-axis title size
+    axis.title.x = element_text(size = 20),  # Increase x-axis title size
+    plot.title = element_text(size = 30, face = "bold"),  # Increase plot title size
+    legend.text = element_text(size = 15),  # Increase legend text size
+    legend.title = element_text(size = 20),  # Increase legend title size
+    strip.text = element_text(size = 12)  # Increase facet label text size
+  ) +
+  annotate(
+    "text", x = 12, y = 12, 
+    label = paste("Period 1 mean:", period_1_mean_avg_spend_per_transaction),
+    hjust = -0.1, vjust = 0.5, size = 7, color = "black"
+  ) +
+  annotate(
+    "text", x = 12, y = 10, 
+    label = paste("Period 1 median:", period_1_median_avg_spend_per_transaction),
+    hjust = -0.1, vjust = -0.5, size = 7, color = "black"
+  ) +
+  annotate(
+    "text", x = 12, y = 8, 
+    label = paste("Period 2 mean:", period_2_mean_avg_spend_per_transaction),
+    hjust = -0.1, vjust = 0.5, size = 7, color = "black"
+  ) +
+  annotate(
+    "text", x = 12, y = 6, 
+    label = paste("Period 2 median:", period_2_median_avg_spend_per_transaction),
+    hjust = -0.1, vjust = -0.5, size = 7, color = "black"
+  )
+```
+
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+
+This graph shows a rightward skew for both periods. They are very similar, however period 2 does seem to have a higher percentage of customers in the higher spend bins than period 1. Overall, the two periods seem to have very similar customer behaviour.</p>
+
+# 8. Creation of profit CBSS
+
+I will now create a CBSS frame showing profit. The Lens_2_CBSS has sales data in the "sales" col, along with customer ID and period. The first step is to caculate the profit on each transaction, which, as stated in Lens 1, must be done using made up margins. 
+
+I will pull every product category name with the following code.
+
+```{r pulling product category names}
+unique(Online_sales$Product_Category)
+```
+
+I will then copy these into ChatGTP, to get profit margins on each product.
+I will then create a frame with this information. 
+
+```{r creating a frame showing profit margins}
+profit_margins <- data.frame(
+  Product_Category = c(
+    "Nest-USA", "Office", "Apparel", "Bags", "Drinkware", "Lifestyle",
+    "Notebooks & Journals", "Headgear", "Waze", "Fun", "Nest-Canada",
+    "Backpacks", "Google", "Bottles", "Gift Cards", "More Bags", "Housewares",
+    "Android", "Accessories", "Nest"
+  ),
+ profit_margin = c(
+    0.30, 0.25, 0.20, 0.25, 0.40, 0.35,
+    0.30, 0.25, 0.30, 0.40, 0.30,
+    0.25, 0.50, 0.40, 0.05, 0.25, 0.35,
+    0.50, 0.35, 0.30
+  )
+)
+```
+
+I will now join this frame in the caculation spending field so that I can caculate profit for each transaction, and then make this into a CBSS log.
+
+```{r joining margin frame with the caculation frame}
+Caculation_spending_field <- left_join(Caculation_spending_field, profit_margins, by = "Product_Category")
+```
+I will check to ensure that there are no null values.
+
+```{r ensuring all transactions have a margin}
+na_rows <- Caculation_spending_field[is.na(Caculation_spending_field$profit_margin), ]
+print(na_rows) 
+```
+I will then take the margin and times it by the inverse of the price paid for the products, to determine the cost that needs to be taken off the final price paid per transaction.
+```{r caculating profit on each transaction}
+Caculation_spending_field$item_cost <- Caculation_spending_field$QantxPrice * (1 - Caculation_spending_field$profit_margin)
+```
+I will then remove that amount from the final price paid. I will not consider any other costs here, however if I had accurate costing information from the accounting department, then I could include this here to get a more accurate view of the customer base.
+```{r caculating profit for each transaction}
+Caculation_spending_field$transaction_profit <- Caculation_spending_field$Final_price -Caculation_spending_field$item_cost
+```
+Now that I have profit for each transaction, I will create a data frame for each period with the relevant data.
+```{r period 1 profit frame creation}
+Period_1_profit <- Caculation_spending_field %>%
+  filter(period == "1") %>%    
+  select(CustomerID, Transaction_Date, transaction_profit, period)
+```
+```{r period 2 profit frame creation}
+Period_2_profit <- Caculation_spending_field %>%
+  filter(period == "2") %>%    
+  select(CustomerID, Transaction_Date, transaction_profit, period)
+```
+
+I will now change the col names so the conversion can occur, however, after conversion, I will change the sales name back to profit.
+```{r changing names for profit period 1}
+names(Period_1_profit)[names(Period_1_profit) == "CustomerID"] <- "cust"
+names(Period_1_profit)[names(Period_1_profit) == "Transaction_Date"] <- "date"
+names(Period_1_profit)[names(Period_1_profit) == "transaction_profit"] <- "sales"
+```
+```{r changing names for profit period 2}
+names(Period_2_profit)[names(Period_2_profit) == "CustomerID"] <- "cust"
+names(Period_2_profit)[names(Period_2_profit) == "Transaction_Date"] <- "date"
+names(Period_2_profit)[names(Period_2_profit) == "transaction_profit"] <- "sales"
+```
+I will also change the class of the date field to date.
+```{r changing str for profit period 1}
+Period_1_profit$date <- as.Date(Period_1_profit$date)
+```
+```{r changing str for profit period 2}
+Period_2_profit$date <- as.Date(Period_2_profit$date)
+```
+I will now convert both period profit frames into CBSS.
+```{r converting period 1 profit to CBSS}
+Period_1_profit_CBSS <- elog2cbs(Period_1_profit)
+```
+```{r converting period 2 profit to CBSS}
+Period_2_profit_CBSS <- elog2cbs(Period_2_profit) 
+```
+I will check to ensure that there are no NA values.
+
+```{r NA check for profit period 1}
+colSums(is.na(Period_1_profit_CBSS))
+```
+```{r NA check for profit period 2}
+colSums(is.na(Period_2_profit_CBSS))
+```
+As there are no NA values, I will now combine these CBSS frames, and create a single frame. I will first add the period lables back into the data.
+```{r adding back period lables 1 for profit period 1}
+Period_1_profit_CBSS$period <- 1
+```
+```{r adding back period lables 2 for profit period 2}
+Period_2_profit_CBSS$period <- 2
+```
+I will now combine these frames so that I can create graphs from them.
+```{r combining the CBSS together for profit}
+Lens_2_profit_CBSS <- bind_rows(Period_1_profit_CBSS, Period_2_profit_CBSS)
+```
+I now have a CBSS log, with a col which can be used to identify which of the two periods a row related to. I will now change the sales col. name to profit, and add a col which shows the number of transactions.
+```{r changing sales to profit}
+Lens_2_profit_CBSS <- Lens_2_profit_CBSS %>%
+  rename(profit=sales)
+```
+```{r adding number of transactions to profit CBSS}
+Lens_2_profit_CBSS$number_of_transactions <- (Lens_2_profit_CBSS$x+1)
+```
+The CBSS showing profit is now complete.
+
+# 9. Creation of profit distribution graph
+
+I will now use this CBSS to create a graph showing the profit distribution amoung customers.
+
+I will begin by assigning each customer row a profit bin.  I will use widths of 200, up to the value of 5,000.
+
+```{r Bin width and values for customer profit}
+bin_width_4 <- 200
+max_value_4 <- 5000
+```
+```{r bin seq for customer profit}
+bins_4 <- c(seq(0, max_value_4, by = bin_width_4), Inf)
+
+```
+I will then make labels for these bins.
+```{r bin labels for customer profit}
+bin_labels_4 <- paste0(bins_4[-length(bins_4)], "-", bins_4[-1])
+bin_labels_4 <- gsub("-Inf", "+", bin_labels_4)
+bin_labels_4 <- gsub("\\b(\\d+)-", "\\1-", bin_labels_4)
+```
+
+I will then create the bins.
+```{r creating the bins for customer profit}
+Lens_2_profit_CBSS <- Lens_2_profit_CBSS %>%
+  mutate(
+    profit_bin = cut(profit, breaks = bins_4, labels = bin_labels_4, include.lowest = TRUE)
+  )
+```
+I will then create a frame showing the bin count and percentage. Note that the total number of customers has already been caculated.
+
+```{r creating data frame for cusotmer profit}
+Lens_2_graph_data_4 <- Lens_2_profit_CBSS %>%
+  group_by(period, profit_bin) %>%
+  summarise(count = n_distinct(cust), .groups = 'drop') %>%
+  complete(period, profit_bin = profit_bin, fill = list(count = 0)) %>%
+  left_join(total_customers, by = "period") %>%
+  mutate(percent = (count / total) * 100)
+```
+I will then calculate the mean and medium profit per customer for each period.
+
+```{r caculating means and medians profit per customer period 1}
+period_1_mean_profit <- Lens_2_profit_CBSS %>%
+  filter(period == 1) %>%
+  summarize(mean_profit_per_customer = round(mean(profit), 2))
+
+period_1_median_profit <- Lens_2_profit_CBSS %>%
+  filter(period == 1) %>%
+  summarize(median_profit_per_customer = round(median(profit), 2))
+```
+```{r caculating means and medians profit per customer period 2}
+period_2_mean_profit <- Lens_2_profit_CBSS %>%
+  filter(period == 2) %>%
+  summarize(mean_profit_per_customer = round(mean(profit), 2))
+
+period_2_median_profit <- Lens_2_profit_CBSS %>%
+  filter(period == 2) %>%
+  summarize(median_profit_per_customer = round(median(profit), 2))
+```
+I can now create the graph.
+```{r Define the custom_labels and custom_breaks function for graph 4}
+custom_labels_4 <- function(labels, breaks) {
+  # Ensure the labels array is the same length as the breaks array
+  labels_to_show <- labels[seq_along(labels) %% 3 == 1]
+  labels_to_show <- c(labels_to_show, labels[length(labels)])
+  # Adjust the breaks to match the labels length
+  breaks_to_show <- breaks[seq_along(breaks) %% 3 == 1]
+  breaks_to_show <- c(breaks_to_show, breaks[length(breaks)])
+  if (length(labels_to_show) != length(breaks_to_show)) {
+    stop("The lengths of breaks and labels do not match.")
+  }
+  return(labels_to_show)
+  }
+  
+custom_breaks_4 <- function(breaks) {
+  breaks_to_show <- breaks[seq_along(breaks) %% 3 == 1]
+  breaks_to_show <- c(breaks_to_show, breaks[length(breaks)])
+  return(breaks_to_show)
+}
+```
+Creating the plot
+```{r creation of graph 4, fig.width=12, fig.height=8}
+ggplot(Lens_2_graph_data_4, aes(x = profit_bin, y = percent, fill = factor(period))) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  labs(
+    title = "Distribution of profit per customer by period",
+    x = "Profit per customer",
+    y = "% customers",
+    fill = "Period"
+  ) +
+  scale_x_discrete(
+    labels = custom_labels(bin_labels_4, bins_4[-length(bins_4)]),
+    breaks = custom_breaks(unique(Lens_2_graph_data_4$profit_bin))
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 15),  # Increase x-axis text size
+    axis.text.y = element_text(size = 20),  # Increase y-axis text size
+    axis.title.y = element_text(size = 20),  # Increase y-axis title size
+    axis.title.x = element_text(size = 20),  # Increase x-axis title size
+    plot.title = element_text(size = 30, face = "bold"),  # Increase plot title size
+    legend.text = element_text(size = 15),  # Increase legend text size
+    legend.title = element_text(size = 20),  # Increase legend title size
+    strip.text = element_text(size = 12)  # Increase facet label text size
+  ) +
+  annotate(
+    "text", x = 12, y = 12, 
+    label = paste("Period 1 mean:", period_1_mean_profit),
+    hjust = -0.1, vjust = 0.5, size = 7, color = "black"
+  ) +
+  annotate(
+    "text", x = 12, y = 10, 
+    label = paste("Period 1 median:", period_1_median_profit),
+    hjust = -0.1, vjust = -0.5, size = 7, color = "black"
+  ) +
+  annotate(
+    "text", x = 12, y = 8, 
+    label = paste("Period 2 mean:", period_2_mean_profit),
+    hjust = -0.1, vjust = 0.5, size = 7, color = "black"
+  ) +
+  annotate(
+    "text", x = 12, y = 6, 
+    label = paste("Period 2 median:", period_2_median_profit),
+    hjust = -0.1, vjust = -0.5, size = 7, color = "black"
+  )
+```
+
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+Once again, a very rightward skewed data, with both periods being very similar. 
+</p>
+
+# 10. Customer base Venn diagram
+
+ I will now create a venn diagram showing which customers are active in both periods, and which are only active in period 1 or 2. For this I need to have customer ID's and period allocation, which can both be found in Lens_2_CBSS. I first need to create 2 sets, showing customer ID's in period.
+```{r creating set 1}
+set1 <- Lens_2_period_1_CBSS$cust
+```
+```{r creating set 2}
+set2 <- Lens_2_period_2_CBSS$cust
+```
+ I then need to define the sets
+ 
+```{r defining the sets}
+sets <- list(
+  Period1 = set1,
+  Period2 = set2
+)
+```
+I can then create the diagram.
+ 
+```{r creating venn diagram, fig.width=12, fig.height=8}
+venn_plot_1 <- venn.diagram(
+  x = sets,
+  category.names = c("Period 1", "Period 2"),
+  filename = NULL,
+  col = c("black", "black"),
+  fill = c("blue", "red"),
+  alpha = 0.5,
+  cex = 5,
+  cat.cex = 4,
+  cat.col = c("blue", "red"),
+  cat.pos = c(-20, 20),
+  cat.dist = c(0.05, 0.05),
+  main = "Customer Activity in
+  Period 1 and Period 2",
+  main.cex = 4
+)
+
+grid.newpage()
+grid.draw(venn_plot_1)
+```
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+This diagram now gives an understanding of which customers were only active in the first 6 months of the year, which ones were active in both, and which ones were active in only the last 6 months. </p> 
+
+# 11. Bar chart of annual profit decomposition by period
+
+I will now show in a bar graph how much profit was earned by customer groups, depending on if they were active in one or both periods. I will use data from Lens_2_period_1_CBSS and Lens_2_period_2_CBSS data frames. 
+
+Firstly, I will insert a new col which identifies if customers only appear in that frame, or also in the other period's frame.
+
+```{r adding col for period 1}
+Period_1_profit_CBSS <- Period_1_profit_CBSS %>%
+  mutate(also_in_other_period = if_else(cust %in% Period_2_profit_CBSS$cust, "Active in both periods", "Only active in this period"))
+```
+```{r adding col for period 2}
+Period_2_profit_CBSS <- Period_2_profit_CBSS %>%
+  mutate(also_in_other_period = if_else(cust %in% Period_1_profit_CBSS$cust, "Active in both periods", "Only active in this period"))
+```
+I then need to combine these two frames back together.
+
+```{r combining the frames for the bar chart}
+bar_chart_data <- rbind(Period_1_profit_CBSS,Period_2_profit_CBSS)
+```
+
+I will now create a data frame for this bar chart, which summarises the profit for each of the four customer groups that are of interest. Profit in period 1 for those who only bought in period 1, profit in period 2 for those who bought in both periods, profit in period 2 for those who only bought in period 2, and profit in period 2 for those who bought in both periods.
+
+```{r creating data frame for graph 5}
+Lens_2_graph_data_5 <- bar_chart_data %>%
+  group_by(period, also_in_other_period) %>%
+  summarise(
+    count = n_distinct(cust),          
+    total_profit = round(sum(sales, na.rm = TRUE) / 1000, 0),  
+    .groups = 'drop'
+  )
+```
+I then need to change the str of the period col from numeric to factor.
+
+```{r change str for graph 5}
+Lens_2_graph_data_5$period <- as.factor(Lens_2_graph_data_5$period)
+```
+
+Now that I have this data frame create, I can create a bar graph showing the difference in profit for these groups.
+
+```{r creation of graph 5, fig.width=12, fig.height=8}
+ggplot(Lens_2_graph_data_5, aes(x = period, y = total_profit, fill = as.factor(also_in_other_period))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = total_profit), position = position_dodge(width = 0.9), vjust = 2) + 
+  labs(
+    title = "Decomposition of 6 Month Profit by Customer Group",
+    x = "Period",
+    y = "Profit (1000 $)",
+    fill = "Activity of periods"
+  ) +
+  theme_minimal()
+```
+
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+The chart indicates a variety of things. Firstly, the profit of those customer who were active in both period increase slightly (9,000), however the profit of customers who were only active in that period increased more from period 1 to 2 (76,000). We can also see that more profit can from customer who were active in both period than only period 1 in period 1, however this was reversed for period 2.</p>
+
+# 12. Decomposition of customer group performance
+
+I now am going to consider the average order frequency, value and margin in the same manner as section 11.
+
+Some of the necessary data can be pulled from Lens_2_CBSS. I will add a column to state if a customer only transacts in one period or both periods. 
+```{r adding col for single or both period transactions}
+Lens_2_CBSS <- Lens_2_CBSS %>%
+  group_by(cust) %>%
+  mutate(appears_in_both_periods = ifelse(n_distinct(period) > 1, "Both", "Single")) %>%
+  ungroup()
+```
+I will now caculate the AOF for each period, and place this into a new data frame. 
+```{r caculating AOF for each period}
+Lens_2_AOF <- Lens_2_CBSS %>%
+  group_by(period, appears_in_both_periods) %>%
+  summarize(AOF = mean(transactions), .groups = 'drop')
+```
+I will then cacualte the AOV for each period, and place this into a new data frame. 
+```{r caculating AOV for each period}
+Lens_2_AOV <- Lens_2_CBSS %>%
+  group_by(period, appears_in_both_periods) %>%
+  summarize(AOV = sum(sales)/sum(transactions))
+```
+To calculate the average margin for each of these groups, I will times the AOV by the AOF by the number of customers in each group, and then divide this by the profit for each group, which was calculated in section 11. I will create a data frame for this caculation which can then be used to make the table.
+
+```{r joining AOF and AOV}
+Lens_2_table_12 <- Lens_2_AOF %>%
+  left_join(Lens_2_AOV, by = c("period", "appears_in_both_periods"))
+```
+I will then add the number of customers in each group from the Lens_2_graph_data_5 data frame.
+```{r adding number of customers}
+Lens_2_table_12 <- Lens_2_table_12 %>%
+  mutate(num_cust = Lens_2_graph_data_5$count)
+```
+I will then add the profit for each group using the same method.
+```{r adding profit}
+Lens_2_table_12 <- Lens_2_table_12 %>%
+  mutate(profit = (Lens_2_graph_data_5$total_profit * 1000))
+```
+I can now perform a calculation to determine the average profit margin for each period.
+```{r table 12 profit margin}
+Lens_2_table_12 <- Lens_2_table_12 %>%
+  mutate(profit_margin = round( Lens_2_table_12$profit/(Lens_2_table_12$AOF * Lens_2_table_12$AOV * Lens_2_table_12$num_cust),4))
+```
+This is now all of the data necessary to create the next table.
+```{r creating table 12}
+kable(Lens_2_table_12, format = "html", escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  # Style the header row only
+  column_spec(1:ncol(Lens_2_table_12), bold = FALSE) %>%  # Remove bold from all columns
+  row_spec(0, bold = TRUE, background = "lightblue", color = "black") %>%  # Header row styles
+  row_spec(2, extra_css = "border-bottom: 3px solid black;")  # Add a thick border under the second row
+```
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+  This table helps to show the breakdown of the differences between the groups that we are considering. As already discovered, the profit of customers active in both periods slightly increased. What our analysis now shows is that average order frequency increased, while average order value actually decreased. These customers were shopping more often, but at a smaller amount. The profit margins between periods also slightly decreased. For shoppers only active in the focal period, we can see that their frequency actually decreased between periods, but their average order value was much larger. There was also slightly more customers in this period which also explains the increase in profit.
+</p>
+
+# 13. Profit decile change
+
+We can now investigate how our customers have changed in their profitability between periods on an individual level. We will do this by creating a table that shows the changes in profit deciles of customers over these periods. I will begin with the Period_1_profit_CBSS and Period_2_profit_CBSS. 
+
+I need to add profit deciles into both of these frames which represent 10% of the profit. I will first create a function and then implement it.
+```{r profit decile function}
+create_profit_deciles <- function(df) {
+  # Calculate total sales
+  total_sales <- sum(df$sales)
+  
+  # Calculate the cumulative percentage of total sales
+  df <- df %>%
+    arrange(desc(sales)) %>%
+    mutate(
+      cumulative_sales = cumsum(sales),
+      cumulative_percentage = cumulative_sales / total_sales
+    )
+  
+  # Assign deciles based on cumulative percentage
+  df <- df %>%
+    mutate(
+      profit_decile = cut(
+        cumulative_percentage,
+        breaks = seq(0, 1, by = 0.1),
+        labels = 1:10,
+        include.lowest = TRUE
+      )
+    )
+  
+  return(df)
+}
+```
+I will then create the profit deciles.
+```{r creating profit deciles for both periods}
+Period_1_profit_CBSS <- create_profit_deciles(Period_1_profit_CBSS)
+Period_2_profit_CBSS <- create_profit_deciles(Period_2_profit_CBSS)
+```
+I will then join the frames.
+```{r joining frames for decile analysis}
+Profit_decile_frame <- full_join(Period_1_profit_CBSS, Period_2_profit_CBSS, by = "cust", suffix = c("_period1", "_period2"))
+```
+I will then input into the decile columns that show NA, either period 1 only or period 2 only. I first need to add this factor as a level for each column.
+```{r adding Period 2 only as factor level}
+levels(Profit_decile_frame$profit_decile_period1) <- c(levels(Profit_decile_frame$profit_decile_period1), "Period 2 only")
+```
+```{r adding Period 1 only as factor level}
+levels(Profit_decile_frame$profit_decile_period2) <- c(levels(Profit_decile_frame$profit_decile_period2), "Period 1 only")
+```
+```{r changing NA values for period 1}
+Profit_decile_frame$profit_decile_period1[is.na(Profit_decile_frame$profit_decile_period1)] <- "Period 2 only"
+```
+```{r changing NA values for period 2}
+Profit_decile_frame$profit_decile_period2[is.na(Profit_decile_frame$profit_decile_period2)] <- "Period 1 only"
+```
+I then need to order these factors to ensure that they appear in the table in the right order.
+```{r odering period factors}
+Profit_decile_frame$profit_decile_period1 <- factor(
+  Profit_decile_frame$profit_decile_period1,
+  levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Period 2 only"),
+  ordered = TRUE
+)
+
+Profit_decile_frame$profit_decile_period2 <- factor(
+  Profit_decile_frame$profit_decile_period2,
+  levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Period 1 only"),
+  ordered = TRUE
+)
+```
+I can now create a table showing how customers have moved between deciles over the periods.
+```{r creation of cross tab table}
+decile_cross_tab <- table(Profit_decile_frame$profit_decile_period2, Profit_decile_frame$profit_decile_period1)
+```
+```{r showing this cross tab table}
+print(decile_cross_tab)
+```
+I will now convert to a data frame for further analysis.
+```{r conversion of cross tab table to a data frame}
+decile_cross_tab_df <- as.data.frame(decile_cross_tab)
+```
+I will change the col names to make further analysis more simple.
+```{r renaming the col of cross tab data}
+colnames(decile_cross_tab_df) <- c("Period_1_decile", "Period_2_decile", "Count")
+```
+I will then pivot this data to make it look like the original frequency chart.
+```{r pivoting data frame}
+dec_CTP <- pivot_wider(
+  decile_cross_tab_df,
+  names_from = Period_2_decile,
+  values_from = Count,
+  values_fill = list(Count = 0)
+)
+```
+Now that the data frame has been pivoted, I will add totals and percentage of customers. 
+
+I first need to convert all but the first col to num.
+```{r convert all but first col to num}
+dec_CTP <- dec_CTP %>%
+  mutate(across(-1, as.numeric))
+```
+I first calculate the totals of each col, with the first col showing Total. These are the total's for period 1 deciles.
+```{r caculating totals for each col}
+total_col <- sapply(dec_CTP, function(x) {
+  if(is.numeric(x)) sum(x, na.rm = TRUE) else "Total"
+})
+```
+I then convert this to a data frame format.
+```{r converting totals to data frame}
+total_col <- as.data.frame(t(total_col), stringsAsFactors = FALSE)
+
+total_col[] <- lapply(total_col, function(x) if(is.character(x)) x else as.numeric(x))
+```
+I will then add this row to the data frame.
+```{r adding period 1 totals to deciles frame}
+dec_CTP <- rbind(dec_CTP, total_col)
+```
+
+I will now add the totals for period 2 deciles.
+I first need to convert the rows to num format, excluding the last row and the first col.
+```{r converting to num for period 2}
+dec_CTP[, -1] <- lapply(dec_CTP[, -1], function(col) {
+  as.numeric(as.character(col))
+})
+```
+I can then calculate the totals of each row, excluding the first column which is the decile for period 2.
+```{r caculating totals for each row period 2}
+total_row <- apply(dec_CTP[, -1], 1, function(x) {
+  sum(x, na.rm = TRUE)
+})
+```
+I then convert this to a data frame format.
+```{r converting period 2 totals to data frame}
+total_row <- as.data.frame(t(total_row), stringsAsFactors = FALSE)
+
+total_row[] <- lapply(total_row, function(x) if(is.character(x)) x else as.numeric(x))
+```
+I then need to change this data to be a column.
+```{r pivoting period 2 data to column}
+total_row <- as.data.frame(t(total_row))
+```
+I will then add this column to the data frame.
+```{r adding period 2 totals}
+dec_CTP <- cbind(dec_CTP, total_row)
+```
+```{r change name of total row from V1}
+colnames(dec_CTP)[colnames(dec_CTP) == "V1"] <- "Total"
+```
+I will then add a row and a col showing the percentage of customers for each decile in each period. From previous analysis, we know that in total there were 900 (501 + 399) customers active in period 1, and 967 active in period 2.
+
+I will add a percentage row which is divided by 900 for period 1.
+```{r caculating customer base percentage period 1}
+# Define the reference value
+reference_value <- 900
+
+calculate_percentage <- function(value, reference) {
+  if (is.numeric(value) && !is.na(value)) {
+    percentage <- (value / reference) * 100
+    paste0(round(percentage, 2), "%")
+  } else {
+    NA
+  }
+}
+
+# Convert all columns except the first to numeric
+dec_CTP[ , -1] <- lapply(dec_CTP[ , -1], as.numeric)
+
+# Calculate percentages relative to the reference value for each column (excluding the first column)
+percentage_row <- c(
+  "% period 1 customers",  # Entry for the first column
+  sapply(dec_CTP[nrow(dec_CTP), -1], function(x) calculate_percentage(x, reference_value))
+)
+
+# Convert percentage_row to a data frame
+percentage_row_df <- as.data.frame(t(percentage_row), stringsAsFactors = FALSE)
+names(percentage_row_df) <- names(dec_CTP)
+
+# Add the new row to the data frame
+dec_CTP <- rbind(dec_CTP, percentage_row_df)
+```
+```{r remove value for period 2 only, which should show NA}
+dec_CTP[13, 12:13] <- NA
+```
+I first need to change some str.
+```{r changing str for percentage caculation for period 2}
+dec_CTP$Total <- as.numeric(as.character(dec_CTP$Total))
+```
+I will then caculate the percentage of the customer base each period 2 decile has, by adding a col which is the total divided by 967.
+```{r caculating customer base percentage period 2}
+dec_CTP$percent_period_2_base <- paste0(round((dec_CTP$Total / 968) * 100, 2), "%")
+```
+I will then remove some values that should not have been caculated.
+```{r remove values that should not be shown}
+dec_CTP[11:13, 14] <- NA
+```
+All of the data necessary is now present in the data frame. I will now create a table which shows hows customers have moved between deciles over the periods.
+```{r showing the decile change table}
+kable(dec_CTP, row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#D7261E") %>%   # Header row styling
+  column_spec(1, background = "#D7261E", color = "white") %>%  # First column styling
+  row_spec(10, extra_css = "border-bottom: 3px solid black;") %>%  # Thick border below the tenth row
+  column_spec(11, extra_css = "border-right: 3px solid black;")  # Thick border to the right of the tenth column
+
+   
+```
+
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+  This chart could be the bedrock of some very insightful analytics. Why are customers moving between deciles? A business could investigate if there are any connecting variables between customers who have moved up or down. For example, in this analysis, 9 customers were in the bottom decile for period 1, but were in deciles 2 - 4 in the second period. It could be very useful to understand these customers, particularly if there are any actions that your business can take to see this replicated in more customers. However, as this is not experimental data, care should be taken not to draw any definite causal links.
+</p>
+
+# 14. Up down analysis
+
+I will now create a table showing how customers have changed in terms of profit, transactions, avg spend per transaction and avg margin. To begin with, I will combine two data frames that have already been made, so that the necessary data is in the one frame.
+```{r joining profit and sales CBSS frames}
+s_p_joined <- full_join(Lens_2_CBSS, Lens_2_profit_CBSS, by = c("cust", "period"))
+```
+I will then add the average margin for each customer in each period, but dividing the sales amount by the profit amount. I will add this margins column now.
+```{r creating a margins col}
+s_p_joined$Avg_margin <- round(((s_p_joined$profit/s_p_joined$sales)*100),2)
+```
+Now that all the necessary data is present, I will begin to create the up down data frame. I will first filter out the customers who are only present in one period, pivot the data, and then caculate the changes in period for each customer. I will also add columns showing a decrease or increase for each variable.
+```{r filtering and caculating changes}
+Both_df <- s_p_joined %>%
+  filter(appears_in_both_periods == "Both") %>%
+  # Ensure there's only one row per customer per period
+  group_by(cust, period) %>%
+  summarize(
+   avg_spend_per_trans = sum(avg_spend_per_trans, na.rm = TRUE),
+    transactions  = sum(transactions, na.rm = TRUE),
+    Avg_margin = mean(Avg_margin, na.rm = TRUE),
+    profit = sum(profit, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = c(avg_spend_per_trans, transactions, Avg_margin, profit),
+    names_sep = "_"
+  ) %>%
+  rename(
+    avg_spend_per_trans_1 = avg_spend_per_trans_1,
+    avg_spend_per_trans_2 = avg_spend_per_trans_2,
+    transactions_1 = transactions_1,
+    transactions_2 = transactions_2,
+    Avg_margin_1 = Avg_margin_1,
+    Avg_margin_2 = Avg_margin_2,
+    profit_1 = profit_1,
+    profit_2 = profit_2
+  )  %>%
+  mutate(
+    avg_spend_per_trans_change = case_when(
+      avg_spend_per_trans_2 > avg_spend_per_trans_1 ~ "Increase",
+      avg_spend_per_trans_2 < avg_spend_per_trans_1 ~ "Decrease",
+      TRUE ~ "No Change"
+    ),
+    transactions_change = case_when(
+      transactions_2 > transactions_1 ~ "Increase",
+      transactions_2 < transactions_1 ~ "Decrease",
+      TRUE ~ "No Change"
+    ),
+    Avg_margin_change = case_when(
+      Avg_margin_2 > Avg_margin_1 ~ "Increase",
+      Avg_margin_2 < Avg_margin_1 ~ "Decrease",
+      TRUE ~ "No Change"
+    ),
+    profit_change = case_when(
+      profit_2 > profit_1 ~ "Increase",
+      profit_2 < profit_1 ~ "Decrease",
+      TRUE ~ "No Change"
+    )
+  )
+```
+I can then make the up down analysis frame, starting with these groups and the number of customers in each group.
+```{r creation of up down analysis}
+up_down_frame <- Both_df %>%
+  group_by(avg_spend_per_trans_change, transactions_change, Avg_margin_change, profit_change) %>%
+  summarise(
+    customer_count = n(),
+    period_1_profit = sum(profit_1),
+    period_2_profit = sum(profit_2),
+    profit_exact_change = sum(profit_2) - sum(profit_1),
+    .groups = 'drop'
+  )%>%
+  select(profit_change, transactions_change, avg_spend_per_trans_change,  Avg_margin_change, 
+         customer_count, period_1_profit, period_2_profit, profit_exact_change)
+```
+I will then change the words to arrows within this frame.
+```{r changing words to arrows}
+up_down_frame <- up_down_frame %>%
+  mutate(across(
+    c(avg_spend_per_trans_change, transactions_change, Avg_margin_change, profit_change),
+    ~ str_replace_all(., c("Increase" = "▲", "Decrease" = "▼", "No Change" = "-"))
+  ))
+```
+I will then replace the col headings names.
+```{r changing col names}
+up_down_frame <- up_down_frame %>%
+  rename(
+    profit = profit_change,'# transactions' = transactions_change,  
+    'avg spend per trans' = avg_spend_per_trans_change,  #
+    'avg margin' = Avg_margin_change,  
+    '# cust' = customer_count,  
+    'period 1 profit' = period_1_profit,    'period 2 profit' = period_2_profit,  # 
+    Change = profit_exact_change)
+```
+I will now add the final rows of data which help to summarise this frame.
+```{r creating summary row for data}
+up_down_frame_summary_1 <- up_down_frame %>%
+  summarise(
+    `profit` = NA,
+    `# transactions` = NA,
+    `avg spend per trans` = NA,
+    `avg margin` = NA,
+    `# cust` = sum(`# cust`, na.rm = TRUE),
+    `period 1 profit` = sum(`period 1 profit`, na.rm = TRUE),
+    `period 2 profit` = sum(`period 2 profit`, na.rm = TRUE),
+    Change = sum(`period 2 profit`, na.rm = TRUE) - sum(`period 1 profit`, na.rm = TRUE))
+```
+```{r adding summary row}
+up_down_frame <- rbind(up_down_frame,up_down_frame_summary_1)
+```
+I will then add a row for period 1 and period 2 customers.
+```{r creating frame for periods profit data}
+periods_profit_single <- s_p_joined %>%
+   filter(appears_in_both_periods == "Single") %>%
+  group_by(period) %>%
+  summarise(
+    `# cust` = n(),
+    `period 1 profit` = sum(profit),
+    `period 2 profit` = sum(profit))
+    .groups = 'drop'
+```
+```{r adding columns}
+periods_profit_single <- periods_profit_single %>%
+  # Add new columns with NA values
+  mutate(
+    profit = NA,
+    `# transactions` = NA,
+    `avg spend per trans` = NA
+  ) %>%
+  # Rename the column
+  rename(
+    `avg margin` = period 
+  )
+  
+```
+I will then change the profit amount to make sense, as these customers only shopped in one period.
+```{r removing profit figures for period 1}
+periods_profit_single <- periods_profit_single %>%
+  mutate(`period 1 profit` = if_else(`avg margin` == 2, 0, `period 1 profit`))
+```
+```{r removing profit figures for other period 2}
+periods_profit_single <- periods_profit_single %>%
+  mutate(`period 2 profit` = if_else(`avg margin` == 1, 0, `period 2 profit`))
+```
+I will then add a change col to reflect the change in profit between the two periods.
+```{r adding col to show change between periods}
+periods_profit_single$Change <- periods_profit_single$`period 2 profit` - periods_profit_single$`period 1 profit`
+```
+I will then order the cols to be that of the up down frame.
+```{r}
+periods_profit_single <- periods_profit_single %>%
+  select(
+    profit, 
+    `# transactions`, 
+    `avg spend per trans`, 
+    `avg margin`, 
+    `# cust`, 
+    `period 1 profit`, 
+    `period 2 profit`, 
+    Change
+  )
+```
+Lastly I will change the 1 and 2 to period 1 and period 2 to make the table more clear.
+```{r changing 1 to periods}
+periods_profit_single <- periods_profit_single %>%
+  mutate(`avg margin` = if_else(`avg margin` == 1, "Period 1", as.character(`avg margin`)))
+```
+```{r changing 2 to periods}
+periods_profit_single <- periods_profit_single %>%
+  mutate(`avg margin` = if_else(`avg margin` == 2, "Period 2", as.character(`avg margin`)))
+```
+I can now combine these two data frames.
+
+```{r adding summary row for single customers}
+up_down_frame <- rbind(up_down_frame,periods_profit_single)
+```
+Lastly, I need to add a totals row at the very bottom.
+```{r creation of Total data frame}
+# Specify the rows you want to select (19 to 21)
+rows_to_select <- 19:21
+
+# Select the rows by their numbers
+bottom_3_rows <- up_down_frame[rows_to_select, ]
+# Calculate totals for these rows
+totals_row <- bottom_3_rows %>%
+  summarise(
+    profit = NA,  # NA for non-numeric columns
+    `# transactions` = NA,
+    `avg spend per trans` = NA,
+    `avg margin` = "Total",  # Specific value for this column
+    `# cust` = sum(`# cust`, na.rm = TRUE),
+    `period 1 profit` = sum(`period 1 profit`, na.rm = TRUE),
+    `period 2 profit` = sum(`period 2 profit`, na.rm = TRUE),
+    `Change` = sum(`Change`, na.rm = TRUE)
+  )
+```
+I will now add this frame into the up down table.
+```{r adding the totals into the frame}
+up_down_frame <- rbind(up_down_frame, totals_row)
+```
+This table is now ready to visualise.
+```{r creating table 14}
+up_down_frame <- up_down_frame %>%
+  arrange(desc(profit))
+
+kable(up_down_frame) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(1, bold = TRUE, color = "white", background = "#D7261E") %>%   # Header row styling
+  row_spec(18, extra_css = "border-bottom: 3px solid black;") %>%  # Thick border below the tenth row
+  column_spec(5, extra_css = "border-right: 3px solid black;")  # Thick border to the right of the tenth column
+```
+
+<p style="border: 3px solid black; padding: 10px; display: inline-block;">
+  This table reveals more deeply how customers changed between periods. Once again, more analysis could be undertaken to reveal what if anything connects these customers, and how it impacts business strategy. This table is the bedrock of a lot of very valuable insights. This concludes our Lens 2 of the customer base audit.
+</p>
+
+
+
