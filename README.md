@@ -1,1 +1,1 @@
-This file is an RMarkdown file containing the code for the second lens of a customer base audit (Fader, Hardie & Ross 2022). 
+This repository contains RMarkdown files containing the code for a customer base audit (Fader, Hardie & Ross 2022). 
